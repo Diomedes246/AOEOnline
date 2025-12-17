@@ -76,6 +76,21 @@ function resize(){
 window.addEventListener("resize", resize);
 resize();
 
+let DEBUG_COLLISIONS = true; // toggle on/off
+
+function drawCircleDebug(x, y, r, color) {
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.stroke();
+}
+
+function drawRectDebug(x, y, w, h, color) {
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x - w / 2, y - h / 2, w, h);
+}
 
 
 /* ================= CAMERA ================= */
@@ -94,6 +109,23 @@ const DIRECTIONS = [0, 22, 45, 67, 90, 112, 135, 157, 180, 202, 225, 247, 270, 2
 const IDLE_FRAMES = 24;
 const WALK_FRAMES = 24;
 const ANIM_SPEED = 0.3;
+
+
+const UNIT_RADIUS = 18;
+const PLAYER_RADIUS = 20;
+const TREE_RADIUS = 140;
+const RESOURCE_RADIUS_COLLIDE = 28;
+
+// Buildings use rectangle collision
+const BUILD_COLLISION_PADDING = -50;
+
+
+const UNIT_ATTACK_RANGE = PLAYER_RADIUS + UNIT_RADIUS + 10; // 10 extra for buffer
+const UNIT_ATTACK_DPS = 30; // damage per second
+const ATTACK_COOLDOWN = 1000 / 60; // 1 tick per frame (60fps)
+const UNIT_MAX_HEALTH = 100;
+const ATTACK_ANIM_FRAMES = 24;
+
 
 const playerSprites = {
   idle: {},
@@ -136,6 +168,25 @@ for (const deg of DIRECTIONS) {
   }
 }
 
+// Inside playerSprites
+playerSprites.attack = {};
+playerSprites.attackshadow = {};
+for(const deg of DIRECTIONS){
+    const d = pad(deg);
+    playerSprites.attack[d] = [];
+    playerSprites.attackshadow[d] = [];
+    for(let i=1;i<=ATTACK_ANIM_FRAMES;i++){
+        const img = new Image();
+        img.src = `static/Attack/Body/${d}/Attack1_Body_${d}_${padFrame(i)}.png`;
+        playerSprites.attack[d].push(img);
+
+        const imgShadow = new Image();
+        imgShadow.src = `static/Attack/Shadow/${d}/Attack1_Shadow_${d}_${padFrame(i)}.png`;
+        playerSprites.attackshadow[d].push(imgShadow);
+    }
+}
+
+
 
 
 
@@ -162,12 +213,6 @@ function getDirKey(dx, dy) {
 
 
 
-
-
-
-
-
-
 /* ================= LOCAL UNITS ================= */
 let myUnits = [
   {
@@ -182,6 +227,38 @@ let myUnits = [
     lastY: 0
   }
 ];
+
+for(const u of myUnits){
+    u.hp = 100;           // max health
+    u.targetEnemy = null;  // {sid, unitIndex} or null
+    u.attackCooldown = 0;  // ms cooldown for attack ticks
+    u.attackFrame = 0;     // animation frame 0-23
+    u.manualMove = false; // true if user right-clicked to move
+}
+
+
+
+function findNearestEnemy(u) {
+    let nearest = null;
+    let nearestDist = Infinity;
+
+    // Check other players' units
+    for(const sid in players){
+        if(sid === mySid) continue;
+        const p = players[sid];
+        p.units.forEach((eu, idx) => {
+            if(eu.hp <= 0) return;
+            const dist = Math.hypot(u.x - eu.x, u.y - eu.y);
+            if(dist < nearestDist){
+                nearestDist = dist;
+                nearest = {sid, idx, x: eu.x, y: eu.y};
+            }
+        });
+    }
+
+    return nearest;
+}
+
 
 function getDirection(dx, dy) {
   const angle = Math.atan2(dy, dx); // -PI to PI
@@ -206,6 +283,23 @@ const TILE_W = 5178;
 const TILE_H = 3009;
 const HALF_W = TILE_W/2.1;
 const HALF_H = TILE_H/2.1;
+
+
+const treeImg = new Image();
+treeImg.src = "static/tree.png";
+
+// Adjust to your sprite size
+const TREE_W = 250;
+const TREE_H = 250;
+
+// Trees will come from server
+let trees = []; // [{x,y},...]
+
+socket.on("server_trees", serverTrees => {
+    trees = serverTrees;
+});
+
+
 
 /* ================= RESOURCES ================= */
 const RESOURCE_RADIUS = 40;
@@ -242,6 +336,139 @@ function spawnResources(){
   }
 }
 spawnResources();
+
+function resolveCircleCircle(a, ar, b, br) {
+    const dx = a.x - b.x;
+    const dy = a.y - b.y;
+    const dist = Math.hypot(dx, dy);
+    const minDist = ar + br;
+
+    // ---------- DEBUG DRAW ----------
+    if (DEBUG_COLLISIONS) {
+        const ax = canvas.width/2 + a.x - camera.x;
+        const ay = canvas.height/2 + a.y - camera.y;
+        const bx = canvas.width/2 + b.x - camera.x;
+        const by = canvas.height/2 + b.y - camera.y;
+
+        ctx.strokeStyle = "rgba(0,255,255,0.4)";
+        ctx.beginPath();
+        ctx.arc(ax, ay, ar, 0, Math.PI*2);
+        ctx.stroke();
+
+        ctx.strokeStyle = "rgba(255,0,0,0.4)";
+        ctx.beginPath();
+        ctx.arc(bx, by, br, 0, Math.PI*2);
+        ctx.stroke();
+    }
+    // ------------------------------
+
+    if (dist === 0 || dist >= minDist) return;
+
+    const overlap = minDist - dist;
+    const nx = dx / dist;
+    const ny = dy / dist;
+
+    // Apply push
+    a.x += nx * overlap;
+    a.y += ny * overlap;
+
+    // ---------- DEBUG PENETRATION ----------
+    if (DEBUG_COLLISIONS) {
+        const ax = canvas.width/2 + a.x - camera.x;
+        const ay = canvas.height/2 + a.y - camera.y;
+
+        ctx.strokeStyle = "yellow";
+        ctx.beginPath();
+        ctx.moveTo(ax, ay);
+        ctx.lineTo(ax + nx * overlap, ay + ny * overlap);
+        ctx.stroke();
+    }
+}
+
+function resolveCircleRect(unit, radius, rect) {
+    const left   = rect.x - BUILD_W/2 - BUILD_COLLISION_PADDING;
+    const right  = rect.x + BUILD_W/2 + BUILD_COLLISION_PADDING;
+    const top    = rect.y - BUILD_H/2 - BUILD_COLLISION_PADDING;
+    const bottom = rect.y + BUILD_H/2 + BUILD_COLLISION_PADDING;
+
+    const closestX = Math.max(left, Math.min(unit.x, right));
+    const closestY = Math.max(top, Math.min(unit.y, bottom));
+
+    const dx = unit.x - closestX;
+    const dy = unit.y - closestY;
+    const dist = Math.hypot(dx, dy);
+
+    // ---------- DEBUG DRAW ----------
+    if (DEBUG_COLLISIONS) {
+        const ux = canvas.width/2 + unit.x - camera.x;
+        const uy = canvas.height/2 + unit.y - camera.y;
+
+        ctx.strokeStyle = "rgba(255,0,0,0.4)";
+        ctx.strokeRect(canvas.width/2 + left - camera.x, canvas.height/2 + top - camera.y, right-left, bottom-top);
+
+        ctx.strokeStyle = "rgba(0,255,255,0.4)";
+        ctx.beginPath();
+        ctx.arc(ux, uy, radius, 0, Math.PI*2);
+        ctx.stroke();
+    }
+    // ------------------------------
+
+    if (dist === 0 || dist >= radius) return;
+
+    const overlap = radius - dist;
+    const nx = dx / dist;
+    const ny = dy / dist;
+
+    // Apply push
+    unit.x += nx * overlap;
+    unit.y += ny * overlap;
+
+    // ---------- DEBUG PENETRATION ----------
+    if (DEBUG_COLLISIONS) {
+        const ux = canvas.width/2 + unit.x - camera.x;
+        const uy = canvas.height/2 + unit.y - camera.y;
+
+        ctx.strokeStyle = "yellow";
+        ctx.beginPath();
+        ctx.moveTo(ux, uy);
+        ctx.lineTo(ux + nx * overlap, uy + ny * overlap);
+        ctx.stroke();
+    }
+}
+
+function applyCollisions(u) {
+    // Trees
+    for (const t of trees) resolveCircleCircle(u, PLAYER_RADIUS, {x: t.x, y: t.y-150}, TREE_RADIUS);
+
+    // Resources
+    for (const r of resources) resolveCircleCircle(u, PLAYER_RADIUS, {x: r.x, y: r.y}, RESOURCE_RADIUS_COLLIDE);
+
+    // Buildings
+    for (const b of buildings) resolveCircleRect(u, PLAYER_RADIUS, b);
+
+    // Other local units
+    for (const other of myUnits) {
+        if (other === u) continue;
+        resolveCircleCircle(u, UNIT_RADIUS, other, UNIT_RADIUS);
+    }
+
+    // Other players' units
+    for (const sid in players) {
+        if (sid === mySid) continue;
+        for (const opUnit of players[sid].units) {
+            resolveCircleCircle(u, PLAYER_RADIUS, opUnit, UNIT_RADIUS);
+        }
+    }
+
+    // Optional: other players as a single "main unit" collision
+    // for (const sid in players) {
+    //     if (sid === mySid) continue;
+    //     const op = players[sid];
+    //     resolveCircleCircle(u, PLAYER_RADIUS, {x: op.x, y: op.y}, PLAYER_RADIUS);
+    // }
+}
+
+
 
 /* ================= RTS INPUT ================= */
 let selecting=false;
@@ -372,64 +599,42 @@ canvas.addEventListener("mouseup", e=>{
       u.selected=(sx>=x1&&sx<=x2 && sy>=y1&&sy<=y2);
     }
   } 
-  if(e.button===2){
-    const wx=camera.x+mouse.x-canvas.width/2;
-    const wy=camera.y+mouse.y-canvas.height/2;
+      if(e.button === 2){ // right click
+        const wx = camera.x + mouse.x - canvas.width/2;
+        const wy = camera.y + mouse.y - canvas.height/2;
 
-    let clickedResource = null;
-    let clickedPlayerSid = null;
+        let clickedResource = null;
+        let clickedPlayerSid = null;
 
-    for(const r of resources){
-      if(Math.hypot(r.x-wx,r.y-wy) < RESOURCE_RADIUS){
-        clickedResource = r;
-        break;
-      }
-    }
-
-    if(!clickedResource){
-      for(const sid in players){
-        if(sid === mySid) continue;
-        const p = players[sid];
-        if(Math.hypot(p.x-wx,p.y-wy) < 20){
-          clickedPlayerSid = sid;
-          break;
+        for(const r of resources){
+            if(Math.hypot(r.x-wx,r.y-wy) < RESOURCE_RADIUS){
+                clickedResource = r;
+                break;
+            }
         }
-      }
-    }
 
-    for(const u of myUnits){
-      if(u.selected){
-        if(clickedResource){
-          u.tx = clickedResource.x;
-          u.ty = clickedResource.y;
-          u.targetResource = clickedResource.id;
-          targetPlayerSid = null;
+        if(!clickedResource){
+            for(const sid in players){
+                if(sid === mySid) continue;
+                const p = players[sid];
+                if(Math.hypot(p.x-wx,p.y-wy) < 20){
+                    clickedPlayerSid = sid;
+                    break;
+                }
+            }
         }
-        else if(clickedPlayerSid){
-          u.tx = players[clickedPlayerSid].x;
-          u.ty = players[clickedPlayerSid].y;
-          targetPlayerSid = clickedPlayerSid;
-          u.targetResource = null;
-        }
-else {
-    const selectedUnits = myUnits.filter(u => u.selected);
-    const spreadRadius = 40; // distance between units
-    const count = selectedUnits.length;
-    
-    selectedUnits.forEach((unit, idx) => {
-        // Arrange units in a circle around the target point
-        const angle = (idx / count) * Math.PI * 2;
-        unit.tx = wx + Math.cos(angle) * spreadRadius;
-        unit.ty = wy + Math.sin(angle) * spreadRadius;
-        unit.targetResource = null;
-        targetPlayerSid = null;
-        harvesting = null;
-    });
-}
 
-      }
+        const selectedUnits = myUnits.filter(u => u.selected);
+
+        selectedUnits.forEach(u => {
+            u.targetResource = clickedResource ? clickedResource.id : null;
+            u.targetEnemy = null;          // stop attacking
+            u.tx = wx;
+            u.ty = wy;
+            u.manualMove = true;           // allow movement to override combat
+            harvesting = null;
+        });
     }
-  }
 });
 
 canvas.addEventListener("contextmenu", e=>e.preventDefault());
@@ -452,21 +657,27 @@ createUnitBtn.onclick = () => {
         const spawnX = selectedBuilding.x + Math.cos(angle) * radius;
         const spawnY = selectedBuilding.y + Math.sin(angle) * radius;
 
-        const newUnit = {
-            x: spawnX,
-            y: spawnY,
-            tx: spawnX,
-            ty: spawnY,
-            selected: false,
-            targetResource: null,
-            anim: "idle",
-            frame: 0,
-            dir: "000",
-            lastX: spawnX,
-            lastY: spawnY
-        };
+const newUnit = {
+    x: spawnX,
+    y: spawnY,
+    tx: spawnX,
+    ty: spawnY,
+    selected: false,
+    targetResource: null,
+    targetEnemy: null,
+    anim: "idle",
+    frame: 0,
+    attackFrame: 0,
+    dir: "000",
+    hp: UNIT_MAX_HEALTH,
+    attackCooldown: 0,
+    manualMove: false,
+    lastX: spawnX,
+    lastY: spawnY
+};
+myUnits.push(newUnit);
+socket.emit("spawn_unit", { unit: newUnit });
 
-        myUnits.push(newUnit);
     }
 };
 
@@ -487,6 +698,7 @@ const MAX_HEALTH = 100;
 // Keep player positions/colors from state
 // Update remote units
 socket.on("state", state => {
+    console.log(state)
     for (const sid in players) {
       if (!state.players[sid]) {
         delete players[sid];
@@ -510,148 +722,261 @@ socket.on("state", state => {
 
       return {
         ...sb,
-
-        // 🔒 UI-only state (NEVER comes from server)
         selected: existing ? existing.selected : false,
         queue: existing ? existing.queue : []
       };
     });
 });
 
+
 socket.on("update_units", data => {
     const sid = data.sid;
     if(sid === mySid) return;
 
-    if(!players[sid]) players[sid] = {x:0,y:0,color:"#fff",units:[]};
+    if(!players[sid]) players[sid] = {x:0, y:0, color:"#fff", units:[]};
 
-    // Normalize units
-    players[sid].units = (data.units || []).map(u => ({
-        x: u.x,
-        y: u.y,
-        tx: u.x,   // target position
-        ty: u.y,
-        anim: u.anim,
-        frame: u.frame,
-        dir: u.dir,
-        lastX: u.x,
-        lastY: u.y
-    }));
+const serverUnits = data.units || [];
+for (let i = 0; i < serverUnits.length; i++) {
+    const su = serverUnits[i];
+    if (!players[sid].units[i]) {
+        players[sid].units[i] = { ...su };
+    } else {
+        const lu = players[sid].units[i];
+        lu.x = su.x;
+        lu.y = su.y;
+        lu.anim = su.anim ?? lu.anim;           // keep local attack anim if running
+        lu.attackFrame = su.attackFrame ?? lu.attackFrame;
+        lu.dir = su.dir ?? lu.dir;
+    }
+}
+
 });
+
+
+
+
 
 
 
 /* ================= UPDATE ================= */
 function update(){
+  // ===== CAMERA =====
   if(keys.w) camera.y-=camSpeed;
   if(keys.s) camera.y+=camSpeed;
   if(keys.a) camera.x-=camSpeed;
   if(keys.d) camera.x+=camSpeed;
 
-  const speed=2;
-  for(const u of myUnits){
-    const dx=u.tx-u.x;
-    const dy=u.ty-u.y;
-    const d=Math.hypot(dx,dy);
-    if(d>1){ u.x+=dx/d*speed; u.y+=dy/d*speed; }
-  }
+  // ===== UNIT MOVEMENT =====
+  const MANUAL_MOVE_SPEED = 4.5;   // right-click speed
+  const ENEMY_CHASE_SPEED = 2.5;   // slower than manual
+  const DEADZONE = 1.5;
+  const STOP_CHASE_DISTANCE = 200;
+  const COMBAT_AGGRO_RADIUS = 200;
 
-for (const u of myUnits) {
+  for (let i = myUnits.length - 1; i >= 0; i--) {
+      const u = myUnits[i];
+
+      if (u.hp <= 0) {
+          myUnits.splice(i, 1); // Remove dead units
+          continue; // Skip further updates for this unit
+      }
+
+      // --- Manual movement takes priority ---
+if(u.manualMove){
     const dx = u.tx - u.x;
     const dy = u.ty - u.y;
     const dist = Math.hypot(dx, dy);
 
-    const speed = 2.5;
-    const deadzone = 1.5;
+    if(dist > DEADZONE){
+        u.x += (dx / dist) * Math.min(MANUAL_MOVE_SPEED, dist);
+        u.y += (dy / dist) * Math.min(MANUAL_MOVE_SPEED, dist);
+        u.anim = "walk";
+        u.dir = getDirKey(dx, dy);
 
-    if (dist > deadzone) {
-        // Move towards target
-        u.x += (dx / dist) * Math.min(speed, dist);
-        u.y += (dy / dist) * Math.min(speed, dist);
+        // ✅ Advance animation frame
+        u.frame += ANIM_SPEED;
+        if(u.frame >= WALK_FRAMES) u.frame = 0;
     } else {
         u.x = u.tx;
         u.y = u.ty;
-    }
-
-    // Compute map-space velocity for animation
-    const vx = u.tx - u.x;
-    const vy = u.ty - u.y;
-    const moving = dist > 0.2;
-
-    if (moving) {
-        // Update direction ONLY while moving
-        u.dir = getDirKey(dx, dy);
-
-        u.anim = "walk";
-        u.frame += ANIM_SPEED;
-        if (u.frame >= WALK_FRAMES) u.frame = 0;
-    } else {
-        // Idle keeps last direction
+        u.manualMove = false;
         u.anim = "idle";
         u.frame += ANIM_SPEED;
-        if (u.frame >= IDLE_FRAMES) u.frame = 0;
+        if(u.frame >= IDLE_FRAMES) u.frame = 0;
     }
-    u.lastX = u.x;
-    u.lastY = u.y;
+
+    continue; // skip combat while moving manually
+}
+
+      // --- Harvesting resources ---
+      if(u.targetResource !== null){
+          const r = resources.find(r=>r.id===u.targetResource);
+          if(r){
+              const dist = Math.hypot(u.x - r.x, u.y - r.y);
+              if(dist < RESOURCE_RADIUS){
+                  if(!harvesting){
+                      harvesting = { resourceId: r.id, startTime: performance.now() };
+                  } else if(performance.now() - harvesting.startTime >= HARVEST_TIME){
+                      resources = resources.filter(rr => rr.id !== r.id);
+                      resourceCount++;
+                      harvesting = null;
+                      u.targetResource = null;
+                  }
+              } else {
+                  harvesting = null;
+              }
+          } else u.targetResource = null;
+      }
+
+      // --- Combat / auto-chase ---
+// Combat update
+for(const u of myUnits){
+    if(u.hp <= 0) continue;
+    if(!u.manualMove){
+        if(!u.targetEnemy || !players[u.targetEnemy.sid]?.units[u.targetEnemy.idx] || players[u.targetEnemy.sid].units[u.targetEnemy.idx].hp <= 0){
+            u.targetEnemy = null;
+        }
+
+        if(!u.targetEnemy){
+            const nearest = findNearestEnemy(u);
+            if(nearest){
+                const enemyDist = Math.hypot(u.x - nearest.x, u.y - nearest.y);
+                if(enemyDist <= COMBAT_AGGRO_RADIUS){
+                    u.targetEnemy = nearest;
+                }
+            }
+        }
+
+        if(u.targetEnemy){
+    const enemy = players[u.targetEnemy.sid].units[u.targetEnemy.idx];
+    if(!enemy || enemy.hp <= 0){
+        u.targetEnemy = null;
+        u.anim = "idle"; // reset animation
+        u.frame = 0;
+        continue;
+    }
+
+    const edx = enemy.x - u.x;
+    const edy = enemy.y - u.y;
+    const edist = Math.hypot(edx, edy);
+
+    if(edist > UNIT_ATTACK_RANGE && edist <= COMBAT_AGGRO_RADIUS){
+        // Move slower towards enemy
+        const moveSpeed = 1.2;
+        u.tx = enemy.x;
+        u.ty = enemy.y;
+        u.x += (edx / edist) * moveSpeed;
+        u.y += (edy / edist) * moveSpeed;
+
+        u.anim = "walk";
+        u.dir = getDirKey(edx, edy);
+    } else if(edist <= UNIT_ATTACK_RANGE){
+        u.anim = "attack";
+        u.attackFrame += ANIM_SPEED;
+        if(u.attackFrame >= ATTACK_ANIM_FRAMES) u.attackFrame = 0;
+
+        if(u.attackCooldown >= ATTACK_COOLDOWN){
+            socket.emit("attack_unit", {
+                targetSid: u.targetEnemy.sid,
+                targetIdx: u.targetEnemy.idx,
+                damage: UNIT_ATTACK_DPS / 60
+            });
+            u.attackCooldown = 0;
+        }
+    } else {
+        // Enemy out of aggro → stop chasing
+        u.targetEnemy = null;
+        u.anim = "idle"; // 🔹 reset to idle
+        u.frame = 0;
+    }
+} else {
+    // No target and not moving manually → ensure idle
+    if(!u.manualMove && u.anim !== "idle"){
+        u.anim = "idle";
+        u.frame = 0;
+    }
+}
+
+    }
+}
+
+for(const u of myUnits){
+    if(u.attackCooldown < ATTACK_COOLDOWN) u.attackCooldown += 16.66; // assuming 60fps ~16.66ms per frame
+
+    if(u.targetEnemy){
+        const enemy = players[u.targetEnemy.sid].units[u.targetEnemy.idx];
+        if(!enemy || enemy.hp <= 0) continue;
+
+        const edx = enemy.x - u.x;
+        const edy = enemy.y - u.y;
+        const edist = Math.hypot(edx, edy);
+
+        if(edist <= UNIT_ATTACK_RANGE){
+            u.anim = "attack";
+
+            if(u.attackCooldown >= ATTACK_COOLDOWN){
+                socket.emit("attack_unit", {
+                    targetSid: u.targetEnemy.sid,
+                    targetIdx: u.targetEnemy.idx,
+                    damage: UNIT_ATTACK_DPS / 60
+                });
+                u.attackCooldown = 0;
+            }
+        }
+    }
 }
 
 
+socket.on("unit_hp_update", data => {
+    const { sid, idx, hp } = data;
+    let playerUnits;
 
-
-
-
-  for(const u of myUnits){
-    if(u.targetResource !== null){
-      const r = resources.find(r=>r.id===u.targetResource);
-      if(!r) continue;
-
-      const dist = Math.hypot(u.x - r.x, u.y - r.y);
-
-      if(dist < RESOURCE_RADIUS){
-        if(!harvesting){
-          harvesting = {
-            resourceId: r.id,
-            startTime: performance.now()
-          };
-        } else if(performance.now() - harvesting.startTime >= HARVEST_TIME){
-            resources = resources.filter(rr=>rr.id !== r.id);
-            resourceCount++;
-            harvesting = null;
-            u.targetResource = null
-        }
-      } else {
-        harvesting = null; // walked away
-      }
+    if (sid === mySid) {
+        playerUnits = myUnits;   // your own units
+    } else {
+        playerUnits = otherPlayers[sid]?.units;
     }
+
+    if (playerUnits && playerUnits[idx]) {
+        playerUnits[idx].hp = hp;  // update from server
+    }
+});
+
+
+// After combat loop, clean up dead units
+
+
+
+      // --- Update frame for walk ---
+      if(u.anim === "walk"){
+          u.frame += ANIM_SPEED;
+          if(u.frame >= WALK_FRAMES) u.frame = 0;
+      }
+
+      // --- Collision ---
+      applyCollisions(u);
+
+      u.lastX = u.x;
+      u.lastY = u.y;
   }
 
-  if(targetPlayerSid && players[targetPlayerSid]){
-    const p = players[targetPlayerSid];
-    const u = myUnits[0];
-
-    const dist = Math.hypot(u.x - p.x, u.y - p.y);
-
-    if(dist < ATTACK_RANGE){
-      playerHealth[targetPlayerSid] -= DPS / 60;
-      if(playerHealth[targetPlayerSid] < 0){
-        playerHealth[targetPlayerSid] = 0;
-      }
-    }
-  }
-
-
+  // ===== SEND STATE TO SERVER =====
   socket.emit("update",{x:myUnits[0].x,y:myUnits[0].y});
-
-
   const unitStates = myUnits.map(u => ({
     x: u.x,
     y: u.y,
     anim: u.anim,
     frame: u.frame,
-    dir: u.dir
+    dir: u.dir,
+    attackFrame: u.attackFrame
   }));
   socket.emit("update_units", { units: unitStates });
 
+
+
+
 }
+
 
 // Update all myUnits
 const unitStates = myUnits.map(u => ({
@@ -664,7 +989,12 @@ const unitStates = myUnits.map(u => ({
 
 socket.emit("update_units", { units: unitStates });
 
-
+  socket.on("unit_hp_update", (data) => {
+    const { sid, idx, hp } = data;
+    if (players[sid] && players[sid].units[idx]) {
+        players[sid].units[idx].hp = hp;
+    }
+});
 
 
 /* ================= BACKGROUND ================= */
@@ -721,68 +1051,122 @@ function draw() {
     }
   }
 
-// Animate other players' units
+
+// Draw trees (depth-sorted)
+const visibleTrees = trees.slice().sort((a, b) => a.y - b.y);
+
+for (const t of visibleTrees) {
+  const x = canvas.width / 2 + t.x - camera.x;
+  const y = canvas.height / 2 + t.y - camera.y;
+
+  ctx.drawImage(
+    treeImg,
+    x - TREE_W / 2,
+    y - TREE_H,
+    TREE_W,
+    TREE_H
+  );
+}
+  
+
+// Animate and draw other players
 for (const sid in players) {
     if (sid === mySid) continue;
     const p = players[sid];
+
     for (const u of p.units) {
-        // Animate frames locally
+        // Initialize local animation frames if missing
+        if (u.frame === undefined) u.frame = 0;
+        if (u.attackFrame === undefined) u.attackFrame = 0;
+
+        let frames, framesShadow;
+
         if (u.anim === "walk") {
+            frames = playerSprites.walk[u.dir];
+            framesShadow = playerSprites.walkshadow[u.dir];
             u.frame += ANIM_SPEED;
             if (u.frame >= WALK_FRAMES) u.frame = 0;
-        } else {
+        } else if (u.anim === "idle") {
+            frames = playerSprites.idle[u.dir];
+            framesShadow = playerSprites.idleshadow[u.dir];
             u.frame += ANIM_SPEED;
             if (u.frame >= IDLE_FRAMES) u.frame = 0;
+        } else if (u.anim === "attack") {
+            frames = playerSprites.attack[u.dir];
+            framesShadow = playerSprites.attackshadow[u.dir];
+            u.attackFrame += ANIM_SPEED;
+            if (u.attackFrame >= ATTACK_ANIM_FRAMES) u.attackFrame = 0;
+        } else {
+            frames = playerSprites.idle[u.dir];
+            framesShadow = playerSprites.idleshadow[u.dir];
         }
-
-        // Optionally, you can interpolate position smoothly:
-        // u.x += (u.tx - u.x) * 0.1;
-        // u.y += (u.ty - u.y) * 0.1;
-    }
-}
+      
 
 
-// Draw all other players
-for (const sid in players) {
-    console.log(players)
-    if (sid === mySid) continue;
-    const p = players[sid];
-    for (const u of p.units) {
+        const img = frames[u.anim === "attack" ? Math.floor(u.attackFrame) : Math.floor(u.frame)];
+        const imgShadow = framesShadow[u.anim === "attack" ? Math.floor(u.attackFrame) : Math.floor(u.frame)];
+
         const x = canvas.width/2 + u.x - camera.x;
         const y = canvas.height/2 + u.y - camera.y;
-
-        const frames = u.anim==="walk"?playerSprites.walk[u.dir]:playerSprites.idle[u.dir];
-        const img = frames[Math.floor(u.frame)];
-        const framesShadow = u.anim==="walk"?playerSprites.walkshadow[u.dir]:playerSprites.idleshadow[u.dir];
-        const imgShadow = framesShadow[Math.floor(u.frame)];
 
         if(imgShadow && imgShadow.complete) ctx.drawImage(imgShadow, x-SPRITE_W/2, y-SPRITE_H/2, SPRITE_W, SPRITE_H);
         if(img && img.complete) ctx.drawImage(img, x-SPRITE_W/2, y-SPRITE_H/2, SPRITE_W, SPRITE_H);
 
-        // Health bar
-        const hp = playerHealth[sid] ?? MAX_HEALTH;
-        const barW = 30, barH = 4;
-        ctx.fillStyle = "black";
-        ctx.fillRect(x-barW/2, y-22, barW, barH);
-        ctx.fillStyle = "lime";
-        ctx.fillRect(x-barW/2, y-22, barW*(hp/MAX_HEALTH), barH);
+        // Draw health
+        const barWidth = 40;
+        const barHeight = 5;
+        const hpPercent = u.hp / 100;
+        ctx.fillStyle = "red";
+        ctx.fillRect(x - barWidth/2, y - 30, barWidth, barHeight);
+        ctx.fillStyle = "green";
+        ctx.fillRect(x - barWidth/2, y - 30, barWidth * hpPercent, barHeight);
     }
 }
 
 
 
+
   // Draw my units
-  for (const u of myUnits) {
+for (const u of myUnits) {
     const x = canvas.width / 2 + u.x - camera.x;
     const y = canvas.height / 2 + u.y - camera.y;
 
-    const framesShadow = u.anim === "walk" ? playerSprites.walkshadow[u.dir] : playerSprites.idleshadow[u.dir];
-    const imgShadow = framesShadow[Math.floor(u.frame)];
-    if (imgShadow && imgShadow.complete) ctx.drawImage(imgShadow, x - SPRITE_W / 2, y - SPRITE_H / 2, SPRITE_W, SPRITE_H);
+    let frames, framesShadow;
+    if(u.anim === "walk"){
+        frames = playerSprites.walk[u.dir];
+        framesShadow = playerSprites.walkshadow[u.dir];
+        u.frame += ANIM_SPEED;
+        if(u.frame >= WALK_FRAMES) u.frame = 0;
+    } else if(u.anim === "idle"){
+        frames = playerSprites.idle[u.dir];
+        framesShadow = playerSprites.idleshadow[u.dir];
+        u.frame += ANIM_SPEED;
+        if(u.frame >= IDLE_FRAMES) u.frame = 0;
+    } else if(u.anim === "attack"){
+        frames = playerSprites.attack[u.dir];
+        framesShadow = playerSprites.attackshadow[u.dir];
+        u.attackFrame += ANIM_SPEED;
+        if(u.attackFrame >= ATTACK_ANIM_FRAMES) u.attackFrame = 0;
+    } else {
+        frames = playerSprites.idle[u.dir];
+        framesShadow = playerSprites.idleshadow[u.dir];
+    }
 
-    const frames = u.anim === "walk" ? playerSprites.walk[u.dir] : playerSprites.idle[u.dir];
-    const img = frames[Math.floor(u.frame)];
-    if (img && img.complete) ctx.drawImage(img, x - SPRITE_W / 2, y - SPRITE_H / 2, SPRITE_W, SPRITE_H);
+    const img = frames[u.anim === "attack" ? Math.floor(u.attackFrame) : Math.floor(u.frame)];
+    const imgShadow = framesShadow[u.anim === "attack" ? Math.floor(u.attackFrame) : Math.floor(u.frame)];
+
+    if (imgShadow && imgShadow.complete) ctx.drawImage(imgShadow, x - SPRITE_W/2, y - SPRITE_H/2, SPRITE_W, SPRITE_H);
+    if (img && img.complete) ctx.drawImage(img, x - SPRITE_W/2, y - SPRITE_H/2, SPRITE_W, SPRITE_H);
+
+    // Draw health, selection, name etc..
+
+    const barWidth = 40;
+    const barHeight = 5;
+    const hpPercent = u.hp / 100;
+    ctx.fillStyle = "red";
+    ctx.fillRect(x - barWidth/2, y - 30, barWidth, barHeight);
+    ctx.fillStyle = "green";
+    ctx.fillRect(x - barWidth/2, y - 30, barWidth * hpPercent, barHeight);
 
     ctx.fillStyle = "white";
     ctx.font = "12px monospace";
@@ -874,6 +1258,14 @@ for (const sid in players) {
     panel.style.display = "none";
     buildingPanel.style.display = "none";
   }
+
+if(DEBUG_COLLISIONS){
+    for(const u of myUnits){
+        applyCollisions(u); // only for drawing, don't push
+    }
+}
+
+
 
   // Update HUD
   hud.innerText = `Camera: ${camera.x|0}, ${camera.y|0}
