@@ -138,47 +138,19 @@ for (const deg of DIRECTIONS) {
 
 
 
-function getNearestDegree(dx, dy) {
-  const angle =
-    (Math.atan2(dy, dx) * 180 / Math.PI + 360) % 360;
 
-  let best = DIRECTIONS[0];
-  let minDiff = 999;
-
-  for (const d of DIRECTIONS) {
-    let diff = Math.abs(d - angle);
-    diff = Math.min(diff, 360 - diff);
-    if (diff < minDiff) {
-      minDiff = diff;
-      best = d;
-    }
-  }
-
-  return best.toString().padStart(3, "0");
-}
-
-function getDirKey(vx, vy) {
-    if (vx === 0 && vy === 0) return "000"; // idle
-
-    // Map-space conversion for isometric screen
-    // screenX = mapX - mapY
-    // screenY = (mapX + mapY)/2
-    // Solve for map-space deltas:
-    const map_dx = -vx - vy; // invert X to swap east/west
-    const map_dy = -vy - vx; // Y-up for north
-
-    // Angle in degrees, Y-up
-    const angle = (Math.atan2(-map_dy, map_dx) * 180 / Math.PI + 360) % 360;
+function getDirKey(dx, dy) {
+    // invert dy because screen Y increases down but 000 is north
+    const angle = ((Math.atan2(dy, dx) * 180 / Math.PI + 90) % 360);
 
     const dirs = [0,22,45,67,90,112,135,157,180,202,225,247,270,292,315,337];
-
     let closest = dirs[0];
     let minDiff = 360;
 
-    for (const d of dirs) {
+    for(const d of dirs){
         let diff = Math.abs(d - angle);
         diff = Math.min(diff, 360 - diff);
-        if (diff < minDiff) {
+        if(diff < minDiff){
             minDiff = diff;
             closest = d;
         }
@@ -186,6 +158,12 @@ function getDirKey(vx, vy) {
 
     return closest.toString().padStart(3,"0");
 }
+
+
+
+
+
+
 
 
 
@@ -219,7 +197,7 @@ let buildings = []; // list of {x, y, owner}
 
 
 
-let otherPlayersUnits = {}; // sid -> [{x,y,anim,frame,dir}, ...]
+
 
 /* ================= TILE ================= */
 const tile = new Image();
@@ -308,51 +286,77 @@ canvas.addEventListener("mousemove", e=>{
 
 
 canvas.addEventListener("mousedown", e => {
-    if (e.button === 0) { // left click
-        let clickedResource = null;  // <-- add this
-        let clickedPlayerSid = null; // <-- add this
+  const wx = camera.x + mouse.x - canvas.width / 2;
+  const wy = camera.y + mouse.y - canvas.height / 2;
 
-        // existing build placement
-        if (buildMode && !localBuildingPlaced) {
-            const wx = camera.x + mouse.x - canvas.width/2;
-            const wy = camera.y + mouse.y - canvas.height/2;
-            buildings.push({x: wx, y: wy, owner: mySid, selected: false, queue: []});
-            localBuildingPlaced = true;
-            buildMode = false;
-            buildBtn.disabled = true;
-            socket.emit("place_building", {x: wx, y: wy});
-            return;
-        }
+  if (e.button === 0) { // left click
 
-        selecting = true;
-        selectStart.x = mouse.x;
-        selectStart.y = mouse.y;
+    // ===== Build placement =====
+  if (buildMode && !localBuildingPlaced) {
+    const newBuilding = { x: wx, y: wy, owner: mySid, selected: true, queue: [] };
+    buildings.push(newBuilding);
+    localBuildingPlaced = true;
+    buildMode = false;
+    buildBtn.disabled = true;
+    socket.emit("place_building", { x: wx, y: wy });
+    return;
+  }
 
-// Deselect all units and buildings first
-for (const u of myUnits) u.selected = false;
-for (const b of buildings) b.selected = false;
-
-let clickedBuilding = null;
-for (const b of buildings) {
-    const bx = canvas.width/2 + b.x - camera.x;
-    const by = canvas.height/2 + b.y - camera.y;
-    const BUILD_RADIUS = 50;
-    if (Math.hypot(mouse.x - bx, mouse.y - by) < BUILD_RADIUS) {
+    // ===== Check for building click =====
+    let clickedBuilding = null;
+    for (const b of buildings) {
+      const bx = canvas.width / 2 + b.x - camera.x;
+      const by = canvas.height / 2 + b.y - camera.y;
+      const dx = Math.abs(mouse.x - bx);
+      const dy = Math.abs(mouse.y - by);
+      if (dx < BUILD_W / 2 && dy < BUILD_H / 2) {
         clickedBuilding = b;
         break;
+      }
     }
-}
 
-if (clickedBuilding && clickedBuilding.owner === mySid) {
-    clickedBuilding.selected = true;
-    panel.style.display = "none";
-    buildingPanel.style.display = "block"; // show building panel
-} else {
+    if (clickedBuilding && clickedBuilding.owner === mySid) {
+      buildings.forEach(b => b.selected = false);
+      clickedBuilding.selected = true;
+      buildingPanel.style.display = "block";
+      panel.style.display = "none";
+      selecting = false;
+      return;
+    }
+
+    // ===== Check for unit click =====
+    let clickedUnit = null;
+    for (const u of myUnits) {
+      const ux = canvas.width / 2 + u.x - camera.x;
+      const uy = canvas.height / 2 + u.y - camera.y;
+      if (Math.hypot(mouse.x - ux, mouse.y - uy) < 20) {
+        clickedUnit = u;
+        break;
+      }
+    }
+
+    if (clickedUnit) {
+      myUnits.forEach(u => u.selected = false);
+      clickedUnit.selected = true;
+      selecting = false;
+      return;
+    }
+
+    // ===== Clicked empty space =====
+    buildings.forEach(b => b.selected = false);
     buildingPanel.style.display = "none";
-}
-}
+    myUnits.forEach(u => u.selected = false);
 
+    // Start selection box
+    selecting = true;
+    selectStart.x = mouse.x;
+    selectStart.y = mouse.y;
+  }
 });
+
+
+
+
 
 
 canvas.addEventListener("mouseup", e=>{
@@ -480,24 +484,60 @@ let playerHealth = {};
 const MAX_HEALTH = 100;
 
 /* ================= SOCKET STATE ================= */
+// Keep player positions/colors from state
+// Update remote units
 socket.on("state", state => {
-  players = state.players || {};
-  buildings = state.buildings || [];
+    for (const sid in players) {
+      if (!state.players[sid]) {
+        delete players[sid];
+      }
+    }
+    for(const sid in state.players){
+        if(sid === mySid) continue;
+        if(!players[sid]) players[sid] = {x:0,y:0,color:"#fff",units:[]};
+        players[sid].x = state.players[sid].x;
+        players[sid].y = state.players[sid].y;
+        players[sid].color = state.players[sid].color;
+        players[sid].units = state.players[sid].units || [];
+    }
+    buildings = state.buildings.map(sb => {
+      // Try to find an existing local building
+      const existing = buildings.find(b =>
+        b.x === sb.x &&
+        b.y === sb.y &&
+        b.owner === sb.owner
+      );
 
-  // Extract other players' units
-  otherPlayersUnits = {};
-  for (const sid in players) {
-    if (sid === mySid) continue;
-    otherPlayersUnits[sid] = players[sid].units || [];
-  }
+      return {
+        ...sb,
 
-  // Preserve selection of buildings
-  const prevSelected = new Set(buildings.filter(b => b.selected).map(b => b.owner + "_" + b.x + "_" + b.y));
-  for(const b of buildings){
-    const key = b.owner + "_" + b.x + "_" + b.y;
-    b.selected = prevSelected.has(key);
-  }
+        // 🔒 UI-only state (NEVER comes from server)
+        selected: existing ? existing.selected : false,
+        queue: existing ? existing.queue : []
+      };
+    });
 });
+
+socket.on("update_units", data => {
+    const sid = data.sid;
+    if(sid === mySid) return;
+
+    if(!players[sid]) players[sid] = {x:0,y:0,color:"#fff",units:[]};
+
+    // Normalize units
+    players[sid].units = (data.units || []).map(u => ({
+        x: u.x,
+        y: u.y,
+        tx: u.x,   // target position
+        ty: u.y,
+        anim: u.anim,
+        frame: u.frame,
+        dir: u.dir,
+        lastX: u.x,
+        lastY: u.y
+    }));
+});
+
 
 
 /* ================= UPDATE ================= */
@@ -515,44 +555,45 @@ function update(){
     if(d>1){ u.x+=dx/d*speed; u.y+=dy/d*speed; }
   }
 
-  for (const u of myUnits) {
-      // Compute movement vector
-      const dx = u.tx - u.x;
-      const dy = u.ty - u.y;
-      const dist = Math.hypot(dx, dy);
+for (const u of myUnits) {
+    const dx = u.tx - u.x;
+    const dy = u.ty - u.y;
+    const dist = Math.hypot(dx, dy);
 
-      const speed = 4;
-      const deadzone = 1.5; // pixels
+    const speed = 2.5;
+    const deadzone = 1.5;
 
-      if (dist > deadzone) {
-          // Move towards target
-          u.x += (dx / dist) * Math.min(speed, dist);
-          u.y += (dy / dist) * Math.min(speed, dist);
-      } else {
-          // Snap to target
-          u.x = u.tx;
-          u.y = u.ty;
-      }
+    if (dist > deadzone) {
+        // Move towards target
+        u.x += (dx / dist) * Math.min(speed, dist);
+        u.y += (dy / dist) * Math.min(speed, dist);
+    } else {
+        u.x = u.tx;
+        u.y = u.ty;
+    }
 
-      // Compute velocity for animation
-      const vx = u.x - u.lastX;
-      const vy = u.y - u.lastY;
-      const moving = Math.hypot(vx, vy) > 0.2; // still a small threshold
+    // Compute map-space velocity for animation
+    const vx = u.tx - u.x;
+    const vy = u.ty - u.y;
+    const moving = dist > 0.2;
 
-      if (moving) {
-          u.dir = getDirKey(vx, vy);
-          u.anim = "walk";
-          u.frame += ANIM_SPEED;
-          if (u.frame >= WALK_FRAMES) u.frame = 0;
-      } else {
-          u.anim = "idle";
-          u.frame += ANIM_SPEED;
-          if (u.frame >= IDLE_FRAMES) u.frame = 0;
-      }
+    if (moving) {
+        // Update direction ONLY while moving
+        u.dir = getDirKey(dx, dy);
 
-      u.lastX = u.x;
-      u.lastY = u.y;
-  }
+        u.anim = "walk";
+        u.frame += ANIM_SPEED;
+        if (u.frame >= WALK_FRAMES) u.frame = 0;
+    } else {
+        // Idle keeps last direction
+        u.anim = "idle";
+        u.frame += ANIM_SPEED;
+        if (u.frame >= IDLE_FRAMES) u.frame = 0;
+    }
+    u.lastX = u.x;
+    u.lastY = u.y;
+}
+
 
 
 
@@ -609,7 +650,7 @@ function update(){
     dir: u.dir
   }));
   socket.emit("update_units", { units: unitStates });
-  
+
 }
 
 // Update all myUnits
@@ -651,211 +692,197 @@ buildingImg.src = "static/building.png";
 const BUILD_W = 506;
 const BUILD_H = 370;
 
-function draw(){
+function draw() {
   update();
-  ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Draw background
   drawBackground();
 
-    // Draw resources
-  for(const r of resources){
-    const x = canvas.width/2 + r.x - camera.x;
-    const y = canvas.height/2 + r.y - camera.y;
-    ctx.drawImage(resourceImg, x-RES_W/2, y-RES_H/2, RES_W, RES_H);
+  // Draw resources
+  for (const r of resources) {
+    const x = canvas.width / 2 + r.x - camera.x;
+    const y = canvas.height / 2 + r.y - camera.y;
+    ctx.drawImage(resourceImg, x - RES_W / 2, y - RES_H / 2, RES_W, RES_H);
   }
 
-  if(harvesting){
-    const r = resources.find(r=>r.id===harvesting.resourceId);
-    if(r){
-      const progress = Math.min(
-        1,
-        (performance.now() - harvesting.startTime) / HARVEST_TIME
-      );
-      const x = canvas.width/2 + r.x - camera.x;
-      const y = canvas.height/2 + r.y - camera.y - 40;
+  // Draw harvesting progress
+  if (harvesting) {
+    const r = resources.find(r => r.id === harvesting.resourceId);
+    if (r) {
+      const progress = Math.min(1, (performance.now() - harvesting.startTime) / HARVEST_TIME);
+      const x = canvas.width / 2 + r.x - camera.x;
+      const y = canvas.height / 2 + r.y - camera.y - 40;
 
       ctx.fillStyle = "black";
-      ctx.fillRect(x-30, y, 60, 6);
+      ctx.fillRect(x - 30, y, 60, 6);
       ctx.fillStyle = "lime";
-      ctx.fillRect(x-30, y, 60 * progress, 6);
+      ctx.fillRect(x - 30, y, 60 * progress, 6);
+    }
+  }
+
+// Animate other players' units
+for (const sid in players) {
+    if (sid === mySid) continue;
+    const p = players[sid];
+    for (const u of p.units) {
+        // Animate frames locally
+        if (u.anim === "walk") {
+            u.frame += ANIM_SPEED;
+            if (u.frame >= WALK_FRAMES) u.frame = 0;
+        } else {
+            u.frame += ANIM_SPEED;
+            if (u.frame >= IDLE_FRAMES) u.frame = 0;
+        }
+
+        // Optionally, you can interpolate position smoothly:
+        // u.x += (u.tx - u.x) * 0.1;
+        // u.y += (u.ty - u.y) * 0.1;
     }
 }
 
-// Hover outline
-if(hoveredResource){
-  const x = canvas.width/2 + hoveredResource.x - camera.x;
-  const y = canvas.height/2 + hoveredResource.y - camera.y;
 
-  ctx.strokeStyle = "yellow";
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.arc(x, y, RESOURCE_RADIUS, 0, Math.PI * 2);
-  ctx.stroke();
+// Draw all other players
+for (const sid in players) {
+    console.log(players)
+    if (sid === mySid) continue;
+    const p = players[sid];
+    for (const u of p.units) {
+        const x = canvas.width/2 + u.x - camera.x;
+        const y = canvas.height/2 + u.y - camera.y;
+
+        const frames = u.anim==="walk"?playerSprites.walk[u.dir]:playerSprites.idle[u.dir];
+        const img = frames[Math.floor(u.frame)];
+        const framesShadow = u.anim==="walk"?playerSprites.walkshadow[u.dir]:playerSprites.idleshadow[u.dir];
+        const imgShadow = framesShadow[Math.floor(u.frame)];
+
+        if(imgShadow && imgShadow.complete) ctx.drawImage(imgShadow, x-SPRITE_W/2, y-SPRITE_H/2, SPRITE_W, SPRITE_H);
+        if(img && img.complete) ctx.drawImage(img, x-SPRITE_W/2, y-SPRITE_H/2, SPRITE_W, SPRITE_H);
+
+        // Health bar
+        const hp = playerHealth[sid] ?? MAX_HEALTH;
+        const barW = 30, barH = 4;
+        ctx.fillStyle = "black";
+        ctx.fillRect(x-barW/2, y-22, barW, barH);
+        ctx.fillStyle = "lime";
+        ctx.fillRect(x-barW/2, y-22, barW*(hp/MAX_HEALTH), barH);
+    }
 }
 
 
-  // Draw buildings
-  for(const b of buildings){
-    const bx = canvas.width/2 + b.x - camera.x;
-    const by = canvas.height/2 + b.y - camera.y;
-    ctx.drawImage(buildingImg, bx-BUILD_W/2, by-BUILD_H/2, BUILD_W, BUILD_H);
-  }
 
+  // Draw my units
+  for (const u of myUnits) {
+    const x = canvas.width / 2 + u.x - camera.x;
+    const y = canvas.height / 2 + u.y - camera.y;
 
-
-  // Draw other players
-for (const sid in otherPlayersUnits) {
-  const units = otherPlayersUnits[sid];
-  for (const u of units) {
-    const x = canvas.width/2 + u.x - camera.x;
-    const y = canvas.height/2 + u.y - camera.y;
+    const framesShadow = u.anim === "walk" ? playerSprites.walkshadow[u.dir] : playerSprites.idleshadow[u.dir];
+    const imgShadow = framesShadow[Math.floor(u.frame)];
+    if (imgShadow && imgShadow.complete) ctx.drawImage(imgShadow, x - SPRITE_W / 2, y - SPRITE_H / 2, SPRITE_W, SPRITE_H);
 
     const frames = u.anim === "walk" ? playerSprites.walk[u.dir] : playerSprites.idle[u.dir];
-    const shadowFrames = u.anim === "walk" ? playerSprites.walkshadow[u.dir] : playerSprites.idleshadow[u.dir];
-
-    const imgShadow = shadowFrames[Math.floor(u.frame)];
     const img = frames[Math.floor(u.frame)];
+    if (img && img.complete) ctx.drawImage(img, x - SPRITE_W / 2, y - SPRITE_H / 2, SPRITE_W, SPRITE_H);
 
-    if(imgShadow && imgShadow.complete) ctx.drawImage(imgShadow, x-SPRITE_W/2, y-SPRITE_H/2, SPRITE_W, SPRITE_H);
-    if(img && img.complete) ctx.drawImage(img, x-SPRITE_W/2, y-SPRITE_H/2, SPRITE_W, SPRITE_H);
+    ctx.fillStyle = "white";
+    ctx.font = "12px monospace";
+    ctx.textAlign = "center";
+    ctx.fillText("YOU", x, y - 40);
 
-    // Draw player name
-    ctx.fillStyle="white";
-    ctx.font="12px monospace";
-    ctx.textAlign="center";
-    ctx.fillText(sid.slice(0,5), x, y-40);
-
-    // Health bar (optional)
-    const hp = playerHealth[sid] ?? MAX_HEALTH;
-    const barW = 30;
-    const barH = 4;
-    ctx.fillStyle = "black";
-    ctx.fillRect(x-barW/2, y-52, barW, barH);
-    ctx.fillStyle = "lime";
-    ctx.fillRect(x-barW/2, y-52, barW*(hp/MAX_HEALTH), barH);
+    // Selection circle
+    if (u.selected) {
+      ctx.strokeStyle = "yellow";
+      ctx.beginPath();
+      ctx.arc(x, y + SPRITE_H / 4, 18, 0, Math.PI * 2);
+      ctx.stroke();
+    }
   }
-}
+
+  // Draw buildings **on top of units**
+  for (const b of buildings) {
+    const bx = canvas.width / 2 + b.x - camera.x;
+    const by = canvas.height / 2 + b.y - camera.y;
+
+    ctx.drawImage(buildingImg, bx - BUILD_W / 2, by - BUILD_H / 2, BUILD_W, BUILD_H);
+
+    if (b.selected) {
+      ctx.strokeStyle = "cyan";
+      ctx.lineWidth = 2;
+      ctx.setLineDash([5, 5]);
+      ctx.strokeRect(bx - BUILD_W / 2, by - BUILD_H / 2, BUILD_W, BUILD_H);
+      ctx.setLineDash([]);
+    }
+  }
+
+  // Hover outline for resource
+  if (hoveredResource) {
+    const x = canvas.width / 2 + hoveredResource.x - camera.x;
+    const y = canvas.height / 2 + hoveredResource.y - camera.y;
+
+    ctx.strokeStyle = "yellow";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(x, y, RESOURCE_RADIUS, 0, Math.PI * 2);
+    ctx.stroke();
+  }
 
   // Hover outline for other players
-  if(hoveredPlayerSid && players[hoveredPlayerSid]){
+  if (hoveredPlayerSid && players[hoveredPlayerSid]) {
     const p = players[hoveredPlayerSid];
-    const x = canvas.width/2 + p.x - camera.x;
-    const y = canvas.height/2 + p.y - camera.y;
+    const x = canvas.width / 2 + p.x - camera.x;
+    const y = canvas.height / 2 + p.y - camera.y;
 
     ctx.strokeStyle = "red";
     ctx.lineWidth = 2;
     ctx.setLineDash([4, 4]);
     ctx.beginPath();
-    ctx.rect(x-14, y-14, 28, 28);
+    ctx.rect(x - 14, y - 14, 28, 28);
     ctx.stroke();
     ctx.setLineDash([]);
   }
 
-
-for (const u of myUnits) {
-  const x = canvas.width / 2 + u.x - camera.x;
-  const y = canvas.height / 2 + u.y - camera.y;
-  ctx.fillStyle="white";
-  ctx.font="12px monospace";
-  ctx.textAlign="center";
-  ctx.fillText("YOU", x, y-40);
-
-  const framesshadow =
-    u.anim === "walk"
-      ? playerSprites.walkshadow[u.dir]
-      : playerSprites.idleshadow[u.dir];
-
-  const imgshadow = framesshadow[Math.floor(u.frame)];
-
-  if (imgshadow && imgshadow.complete) {
-    ctx.drawImage(
-      imgshadow,
-      x - SPRITE_W / 2,
-      y - SPRITE_H / 2,
-      SPRITE_W,
-      SPRITE_H
-    );
-  }
-
-
-  const frames =
-    u.anim === "walk"
-      ? playerSprites.walk[u.dir]
-      : playerSprites.idle[u.dir];
-
-  const img = frames[Math.floor(u.frame)];
-
-  if (img && img.complete) {
-    ctx.drawImage(
-      img,
-      x - SPRITE_W / 2,
-      y - SPRITE_H / 2,
-      SPRITE_W,
-      SPRITE_H
-    );
-  }
-
-
-
-
-
-  if (u.selected) {
-    ctx.strokeStyle = "yellow";
-    ctx.beginPath();
-    ctx.arc(x, y + SPRITE_H / 4, 18, 0, Math.PI * 2);
-    ctx.stroke();
-  }
-}
-
-for (const b of buildings) {
-    const bx = canvas.width/2 + b.x - camera.x;
-    const by = canvas.height/2 + b.y - camera.y;
-
-    ctx.drawImage(buildingImg, bx-BUILD_W/2, by-BUILD_H/2, BUILD_W, BUILD_H);
-
-    // Draw selection
-    if (b.selected) {
-        ctx.strokeStyle = "cyan";
-        ctx.lineWidth = 2;
-        ctx.setLineDash([5,5]);
-        ctx.strokeRect(bx-BUILD_W/2, by-BUILD_H/2, BUILD_W, BUILD_H);
-        ctx.setLineDash([]);
-    }
-}
-
   // Draw building placement preview
-  if(buildMode){
-    ctx.globalAlpha=0.5;
-    const wx=camera.x+mouse.x-canvas.width/2;
-    const wy=camera.y+mouse.y-canvas.height/2;
-    const bx=canvas.width/2+wx-camera.x;
-    const by=canvas.height/2+wy-camera.y;
-    ctx.drawImage(buildingImg, bx-BUILD_W/2, by-BUILD_H/2, BUILD_W, BUILD_H);
-    ctx.globalAlpha=1;
+  if (buildMode) {
+    ctx.globalAlpha = 0.5;
+    const wx = camera.x + mouse.x - canvas.width / 2;
+    const wy = camera.y + mouse.y - canvas.height / 2;
+    const bx = canvas.width / 2 + wx - camera.x;
+    const by = canvas.height / 2 + wy - camera.y;
+    ctx.drawImage(buildingImg, bx - BUILD_W / 2, by - BUILD_H / 2, BUILD_W, BUILD_H);
+    ctx.globalAlpha = 1;
   }
 
   // Draw selection box
-  if(selecting){
-    ctx.strokeStyle="white";
-    ctx.setLineDash([5,5]);
-    ctx.strokeRect(selectStart.x, selectStart.y, mouse.x-selectStart.x, mouse.y-selectStart.y);
+  if (selecting) {
+    ctx.strokeStyle = "white";
+    ctx.setLineDash([5, 5]);
+    ctx.strokeRect(selectStart.x, selectStart.y, mouse.x - selectStart.x, mouse.y - selectStart.y);
     ctx.setLineDash([]);
   }
 
-const selectedCount = myUnits.filter(u=>u.selected).length;
-if (buildings.some(b=>b.selected)) {
+  // Update panels
+  const selectedBuilding = buildings.find(b => b.selected);
+  const selectedUnits = myUnits.filter(u => u.selected);
+
+  if (selectedBuilding) {
+    buildingPanel.style.display = "block";
     panel.style.display = "none";
-} else {
-    panel.style.display = selectedCount>0 ? "block" : "none";
-}
+  } else if (selectedUnits.length > 0) {
+    panel.style.display = "block";
+    buildingPanel.style.display = "none";
+  } else {
+    panel.style.display = "none";
+    buildingPanel.style.display = "none";
+  }
 
-
-  hud.innerText =
-    `Camera: ${camera.x|0}, ${camera.y|0}
-  Resources: ${resourceCount}
-  Selected: ${selectedCount}`;
+  // Update HUD
+  hud.innerText = `Camera: ${camera.x|0}, ${camera.y|0}
+Resources: ${resourceCount}
+Selected: ${selectedUnits.length}`;
 
   requestAnimationFrame(draw);
 }
+
 
 tile.onload = draw;
 </script>

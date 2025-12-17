@@ -29,17 +29,29 @@ def emit_state():
 @socketio.on("connect")
 def on_connect():
     sid = request.sid
-    players[sid] = {"x": 0, "y": 0, "color": random_color()}
+    players[sid] = {"x": 0, "y": 0, "color": random_color(), "units": [
+        {"x": 0, "y": 0, "tx":0, "ty":0, "anim":"idle", "frame":0, "dir":"000", "selected": False}
+    ]}
     emit_state()
+
 
 @socketio.on("disconnect")
 def on_disconnect():
     sid = request.sid
-    players.pop(sid, None)
-    # Remove all buildings owned by this player
+
+    # Remove player
+    if sid in players:
+        players.pop(sid)
+
+    # Remove their buildings
     global buildings
     buildings = [b for b in buildings if b["owner"] != sid]
-    emit_state()
+
+    # Tell ALL clients to hard-sync
+    socketio.emit("state", {
+        "players": players,
+        "buildings": buildings
+    })
 
 @socketio.on("update")
 def on_update(data):
@@ -48,6 +60,17 @@ def on_update(data):
         players[sid]["x"] = data.get("x", players[sid]["x"])
         players[sid]["y"] = data.get("y", players[sid]["y"])
     emit_state()
+
+@socketio.on("update_units")
+def on_update_units(data):
+    sid = request.sid
+    if sid in players:
+        players[sid]["units"] = data.get("units", [])
+        # Emit to everyone except the sender
+        socketio.emit(
+            "update_units",
+            {"sid": sid, "units": players[sid]["units"]},
+        )
 
 @socketio.on("place_building")
 def place_building(data):
