@@ -57,6 +57,16 @@ canvas { display:block; }
   <button id="createUnitBtn">Create Unit</button>
 </div>
 
+<div id="unit-panel" style="position:fixed; right:10px; top:10px; width:200px; background:rgba(0,0,0,0.7); color:white; padding:10px; border-radius:8px;">
+    <h3>Selected Units</h3>
+    <div id="unit-list"></div>
+    <div id="unit-items" style="margin-top:10px;">
+        <h4>Unit Items</h4>
+        <ul id="items-list"></ul>
+    </div>
+</div>
+
+
 <script>
 /* ================= SETUP ================= */
 const canvas = document.getElementById("game");
@@ -125,6 +135,268 @@ const UNIT_ATTACK_DPS = 30; // damage per second
 const ATTACK_COOLDOWN = 1000 / 60; // 1 tick per frame (60fps)
 const UNIT_MAX_HEALTH = 100;
 const ATTACK_ANIM_FRAMES = 24;
+
+
+let groundItems = []; // {id, name, x, y}
+
+const itemIcons = {
+  sword: new Image(),
+  shield: new Image()
+};
+itemIcons.sword.src = "static/items/sword.png";   // make these files
+itemIcons.shield.src = "static/items/shield.png"; // or draw text fallback
+const GROUND_ITEM_SIZE = 32;
+const PICKUP_RADIUS = 26;
+
+const PICKUP_DISTANCE = 120; // how close unit must be to pick up from ground
+let currentItemsUnitId = null; // which unit's equipment UI is currently showing
+
+
+function unitCanPickup(unit, groundItem) {
+  return Math.hypot(unit.x - groundItem.x, unit.y - groundItem.y) <= PICKUP_DISTANCE;
+}
+
+let hoveredGroundItem = null;
+
+let draggingPickup = null; // { groundItemId, unitId }
+let dragMouse = { x: 0, y: 0 };
+
+function findSlotElementAtScreen(x, y) {
+  const el = document.elementFromPoint(x, y);
+  if (!el) return null;
+  return el.closest && el.closest("#items-list li");
+}
+
+function getFirstSelectedUnit() {
+  return myUnits.find(u => u.selected) || null;
+}
+function onGlobalDragMove(e) {
+  // keep mouse updated even over UI
+  dragMouse.x = e.clientX;
+  dragMouse.y = e.clientY;
+
+  // optional: block text selection while dragging
+  e.preventDefault();
+}
+
+function onGlobalDragEnd(e) {
+  // stop capturing
+  window.removeEventListener("mousemove", onGlobalDragMove, true);
+  window.removeEventListener("mouseup", onGlobalDragEnd, true);
+
+  if (!draggingPickup) return;
+
+  const gi = groundItems.find(x => x.id === draggingPickup.groundItemId);
+  const picker = myUnits.find(u => u.id === draggingPickup.unitId);
+  draggingPickup = null;
+
+  if (!gi || !picker) return;
+
+  // must still be in range
+  if (!unitCanPickup(picker, gi)) return;
+
+  // must drop on a slot
+  const slotEl = findSlotElementAtScreen(e.clientX, e.clientY);
+  if (!slotEl) return;
+
+  const slotIndex = parseInt(slotEl.dataset.slotIndex, 10);
+  const unitId = slotEl.dataset.unitId;
+
+  const targetUnit = myUnits.find(u => u.id === unitId);
+  if (!targetUnit) return;
+
+  if (!targetUnit.itemSlots) targetUnit.itemSlots = [null, null];
+  if (targetUnit.itemSlots[slotIndex]) return; // must be empty
+
+  // equip + remove from ground
+  targetUnit.itemSlots[slotIndex] = { id: crypto.randomUUID(), name: gi.name };
+  groundItems = groundItems.filter(x => x.id !== gi.id);
+
+  renderUnitItems(targetUnit);
+}
+
+
+function renderUnitItems(unit) {
+  currentItemsUnitId = unit.id;
+
+  const itemsList = document.getElementById("items-list");
+  itemsList.innerHTML = "";
+
+  if (!unit.itemSlots) unit.itemSlots = [null, null];
+
+  for (let i = 0; i < 2; i++) {
+    const slot = unit.itemSlots[i];
+
+    const li = document.createElement("li");
+    li.style.display = "flex";
+    li.style.alignItems = "center";
+    li.style.justifyContent = "space-between";
+    li.style.border = "1px solid #777";
+    li.style.borderRadius = "6px";
+    li.style.padding = "6px";
+    li.style.marginBottom = "6px";
+    li.style.background = "rgba(255,255,255,0.05)";
+
+    li.dataset.slotIndex = String(i);
+    li.dataset.unitId = unit.id;
+
+    const left = document.createElement("div");
+    left.textContent = `Slot ${i + 1}: ${slot ? slot.name : "(empty)"}`;
+    li.appendChild(left);
+
+    // Allow dropping from ground -> slot OR slot -> slot
+    li.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      li.style.outline = "2px dashed #fff";
+    });
+    li.addEventListener("dragleave", () => {
+      li.style.outline = "";
+    });
+
+    li.addEventListener("drop", (e) => {
+      e.preventDefault();
+      li.style.outline = "";
+
+      const payloadStr = e.dataTransfer.getData("application/json");
+      if (!payloadStr) return;
+
+      let payload;
+      try { payload = JSON.parse(payloadStr); } catch { return; }
+
+      const targetUnit = myUnits.find(u => u.id === unit.id);
+      if (!targetUnit) return;
+      if (!targetUnit.itemSlots) targetUnit.itemSlots = [null, null];
+
+      const slotIndex = i;
+
+      // If dropping a ground item into this slot:
+      if (payload.type === "ground_item") {
+        const gi = groundItems.find(x => x.id === payload.groundItemId);
+        if (!gi) return;
+
+        // Must be close enough to pick up
+        if (!unitCanPickup(targetUnit, gi)) return;
+
+        // Slot must be empty
+        if (targetUnit.itemSlots[slotIndex]) return;
+
+        targetUnit.itemSlots[slotIndex] = { id: crypto.randomUUID(), name: gi.name };
+        groundItems = groundItems.filter(x => x.id !== gi.id);
+
+        renderUnitItems(targetUnit);
+        return;
+      }
+
+      // If dropping a unit item (slot -> slot) (optional nice feature):
+      if (payload.type === "unit_item") {
+        const fromUnit = myUnits.find(u => u.id === payload.unitId);
+        if (!fromUnit || !fromUnit.itemSlots) return;
+
+        const fromSlot = payload.slotIndex;
+        const moving = fromUnit.itemSlots[fromSlot];
+        if (!moving) return;
+
+        // If target slot occupied, swap
+        const temp = targetUnit.itemSlots[slotIndex];
+        targetUnit.itemSlots[slotIndex] = moving;
+        fromUnit.itemSlots[fromSlot] = temp || null;
+
+        renderUnitItems(targetUnit);
+        return;
+      }
+    });
+
+    // If slot has item: make it draggable out
+    if (slot) {
+      const chip = document.createElement("div");
+      chip.textContent = "drag";
+      chip.style.padding = "3px 8px";
+      chip.style.border = "1px solid #aaa";
+      chip.style.borderRadius = "6px";
+      chip.style.cursor = "grab";
+      chip.style.userSelect = "none";
+      chip.style.background = "rgba(0,0,0,0.3)";
+      chip.draggable = true;
+
+      chip.addEventListener("dragstart", (e) => {
+        const payload = {
+          type: "unit_item",
+          unitId: unit.id,
+          slotIndex: i,
+          item: slot
+        };
+        e.dataTransfer.setData("application/json", JSON.stringify(payload));
+        e.dataTransfer.effectAllowed = "move";
+      });
+
+      li.appendChild(chip);
+    }
+
+    itemsList.appendChild(li);
+  }
+}
+
+
+
+
+canvas.addEventListener("dragover", (e) => {
+  e.preventDefault(); // allow drop
+});
+
+canvas.addEventListener("drop", (e) => {
+  e.preventDefault();
+
+  let payloadStr = e.dataTransfer.getData("application/json");
+  if (!payloadStr) return;
+
+  let payload;
+  try { payload = JSON.parse(payloadStr); }
+  catch { return; }
+
+  if (payload.type !== "unit_item") return;
+   // Allow moving a ground item around by dragging on canvas (optional)
+  if (payload.type === "ground_item") {
+    const gi = groundItems.find(x => x.id === payload.groundItemId);
+    if (!gi) return;
+    gi.x = wx;
+    gi.y = wy;
+    return;
+  }
+
+  const { unitId, slotIndex, item } = payload;
+
+  // Convert screen -> world
+  const wx = camera.x + e.clientX - canvas.width / 2;
+  const wy = camera.y + e.clientY - canvas.height / 2;
+
+  // Find local unit (only allow dragging from your own units)
+  const u = myUnits.find(x => x.id === unitId);
+  if (!u || !u.itemSlots) return;
+
+  // Verify still in that slot
+  const slot = u.itemSlots[slotIndex];
+  if (!slot || slot.id !== item.id) return;
+
+  // Remove from unit slot
+  u.itemSlots[slotIndex] = null;
+
+  // Spawn ground item
+  groundItems.push({
+    id: crypto.randomUUID(),
+    name: item.name,
+    x: wx,
+    y: wy
+  });
+
+  // Refresh panel if this unit is the currently displayed one
+  renderUnitItems(u);
+
+  // OPTIONAL: emit to server so others see it
+  // socket.emit("drop_item", { item: { id: ..., name: item.name, x: wx, y: wy }, fromUnitId: unitId, slotIndex });
+});
+
+
+
 
 
 const playerSprites = {
@@ -225,17 +497,27 @@ function getUnitTargetOffset(idx, total) {
 /* ================= LOCAL UNITS ================= */
 let myUnits = [
   {
+    id: crypto.randomUUID(),   // ✅ ADD THIS
     x: 0, y: 0,
     tx: 0, ty: 0,
     selected: false,
     targetResource: null,
     anim: "idle",
     frame: 0,
-    dir: "000", // ← use string here
+    dir: "000",
     lastX: 0,
-    lastY: 0
+    lastY: 0,
+    hp: UNIT_MAX_HEALTH,
+    attackCooldown: 0,
+    attackFrame: 0,
+    manualMove: false,
+    itemSlots: [
+  { id: crypto.randomUUID(), name: "sword" },
+  { id: crypto.randomUUID(), name: "shield" }
+]
   }
 ];
+
 
 for(const u of myUnits){
     u.hp = 100;           // max health
@@ -502,6 +784,18 @@ canvas.addEventListener("mousemove", e=>{
   hoveredResource = null;
   hoveredPlayerSid = null;
 
+    // Ground item hover (priority 0)
+  hoveredGroundItem = null;
+  for (const it of groundItems) {
+    if (Math.hypot(it.x - wx, it.y - wy) < 18) {
+      hoveredGroundItem = it;
+      canvas.style.cursor = "grab";
+      break;
+    }
+  }
+ if (hoveredGroundItem && !draggingPickup) return;
+
+
   // Resource hover (priority 1)
   for(const r of resources){
     if(Math.hypot(r.x-wx, r.y-wy) < RESOURCE_RADIUS){
@@ -526,10 +820,71 @@ canvas.addEventListener("mousemove", e=>{
 });
 
 
+// { groundItemId, offsetX, offsetY, unitId }
+
+function getFirstSelectedUnit() {
+  return myUnits.find(u => u.selected) || null;
+}
+
+function findSlotElementAtScreen(x, y) {
+  const el = document.elementFromPoint(x, y);
+  if (!el) return null;
+  // climb up to the LI
+  return el.closest && el.closest("#items-list li");
+}
+
+
+
+function updateSelectedUnits() {
+    // Build the lookup table from current live data
+    allUnits[mySid] = myUnits;
+    for (const sid in players) {
+        allUnits[sid] = players[sid].units || [];
+    }
+
+    selectedUnits = myUnits.filter(u => u.selected).map(u => u.id);
+
+    renderUnitPanel();
+
+    // If nothing selected, clear items UI
+    if (selectedUnits.length === 0) {
+        document.getElementById("items-list").innerHTML = "";
+        return;
+    }
+
+    // Auto-show items for first selected unit (local units have items)
+    const unit = findUnitById(selectedUnits[0]);
+    if (unit) renderUnitItems(unit);
+}
+
+
+
 
 canvas.addEventListener("mousedown", e => {
   const wx = camera.x + mouse.x - canvas.width / 2;
   const wy = camera.y + mouse.y - canvas.height / 2;
+
+if (e.button === 0) {
+  const picker = getFirstSelectedUnit();
+  if (picker) {
+    const hit = groundItems.find(it => Math.hypot(it.x - wx, it.y - wy) < 18);
+    if (hit && unitCanPickup(picker, hit)) {
+      draggingPickup = { groundItemId: hit.id, unitId: picker.id };
+
+      dragMouse.x = e.clientX;
+      dragMouse.y = e.clientY;
+
+      // CAPTURE events globally so UI can't "steal" the drag
+      window.addEventListener("mousemove", onGlobalDragMove, true);
+      window.addEventListener("mouseup", onGlobalDragEnd, true);
+
+      e.preventDefault();
+      return;
+    }
+  }
+}
+
+
 
   if (e.button === 0) { // left click
 
@@ -543,6 +898,8 @@ canvas.addEventListener("mousedown", e => {
     socket.emit("place_building", { x: wx, y: wy });
     return;
   }
+
+
 
     // ===== Check for building click =====
     let clickedBuilding = null;
@@ -563,6 +920,7 @@ canvas.addEventListener("mousedown", e => {
       buildingPanel.style.display = "block";
       panel.style.display = "none";
       selecting = false;
+      updateSelectedUnits(); // <-- sync panel
       return;
     }
 
@@ -580,6 +938,8 @@ canvas.addEventListener("mousedown", e => {
     if (clickedUnit) {
       myUnits.forEach(u => u.selected = false);
       clickedUnit.selected = true;
+
+        updateSelectedUnits(); // <-- sync panel
       selecting = false;
       return;
     }
@@ -588,7 +948,7 @@ canvas.addEventListener("mousedown", e => {
     buildings.forEach(b => b.selected = false);
     buildingPanel.style.display = "none";
     myUnits.forEach(u => u.selected = false);
-
+    updateSelectedUnits(); // <-- sync panel
     // Start selection box
     selecting = true;
     selectStart.x = mouse.x;
@@ -597,6 +957,41 @@ canvas.addEventListener("mousedown", e => {
 });
 
 
+canvas.addEventListener("mouseup", (e) => {
+  if (e.button !== 0) return;
+  if (!draggingPickup) return;
+
+  const gi = groundItems.find(x => x.id === draggingPickup.groundItemId);
+  const picker = myUnits.find(u => u.id === draggingPickup.unitId);
+  draggingPickup = null;
+
+  if (!gi || !picker) return;
+
+  // Must still be in range at drop time
+  if (!unitCanPickup(picker, gi)) return;
+
+  // Must drop onto a slot in the UI
+  const slotEl = findSlotElementAtScreen(e.clientX, e.clientY);
+  if (!slotEl) return;
+
+  const slotIndex = parseInt(slotEl.dataset.slotIndex, 10);
+  const unitId = slotEl.dataset.unitId;
+
+  // Only allow equipping to LOCAL unit equipment panel
+  const targetUnit = myUnits.find(u => u.id === unitId);
+  if (!targetUnit) return;
+
+  if (!targetUnit.itemSlots) targetUnit.itemSlots = [null, null];
+
+  // slot must be empty
+  if (targetUnit.itemSlots[slotIndex]) return;
+
+  // equip
+  targetUnit.itemSlots[slotIndex] = { id: crypto.randomUUID(), name: gi.name };
+  groundItems = groundItems.filter(x => x.id !== gi.id);
+
+  renderUnitItems(targetUnit);
+});
 
 
 
@@ -604,6 +999,7 @@ canvas.addEventListener("mousedown", e => {
 canvas.addEventListener("mouseup", e=>{
   if(e.button===0){
     selecting=false;
+
     const x1=Math.min(selectStart.x,mouse.x);
     const y1=Math.min(selectStart.y,mouse.y);
     const x2=Math.max(selectStart.x,mouse.x);
@@ -613,7 +1009,9 @@ canvas.addEventListener("mouseup", e=>{
       const sy=canvas.height/2+u.y-camera.y;
       u.selected=(sx>=x1&&sx<=x2 && sy>=y1&&sy<=y2);
     }
+    updateSelectedUnits(); // <-- sync panel
   } 
+
       if(e.button === 2){ // right click
         const wx = camera.x + mouse.x - canvas.width/2;
         const wy = camera.y + mouse.y - canvas.height/2;
@@ -649,6 +1047,8 @@ canvas.addEventListener("mouseup", e=>{
             u.manualMove = true;           // allow movement to override combat
             harvesting = null;
         });
+
+        
     }
 });
 
@@ -673,6 +1073,7 @@ createUnitBtn.onclick = () => {
         const spawnY = selectedBuilding.y + Math.sin(angle) * radius;
 
 const newUnit = {
+    id: crypto.randomUUID(), // or a simple incrementing counter
     x: spawnX,
     y: spawnY,
     tx: spawnX,
@@ -688,7 +1089,11 @@ const newUnit = {
     attackCooldown: 0,
     manualMove: false,
     lastX: spawnX,
-    lastY: spawnY
+    lastY: spawnY,
+   itemSlots: [
+  { id: crypto.randomUUID(), name: "sword" },
+  { id: crypto.randomUUID(), name: "shield" }
+]
 };
 myUnits.push(newUnit);
 socket.emit("spawn_unit", { unit: newUnit });
@@ -831,6 +1236,43 @@ socket.on("update_units", ({ sid, units }) => {
 
 
 
+let selectedUnits = []; // Array of selected unit IDs
+let allUnits = {}; // sid -> units list (updated from server)
+
+// Function to render selected units in panel
+function renderUnitPanel() {
+    const unitListDiv = document.getElementById("unit-list");
+    unitListDiv.innerHTML = ""; // clear
+
+    selectedUnits.forEach(uid => {
+        let unit = findUnitById(uid);
+        if (!unit) return;
+
+        const unitDiv = document.createElement("div");
+        unitDiv.textContent = `Unit ${unit.id.slice(0,4)}`; // show short id
+        unitDiv.style.cursor = "pointer";
+        unitDiv.style.marginBottom = "5px";
+        unitDiv.style.padding = "2px 5px";
+        unitDiv.style.border = "1px solid white";
+        unitDiv.style.borderRadius = "4px";
+        unitDiv.addEventListener("click", () => {
+            renderUnitItems(unit);
+        });
+        unitListDiv.appendChild(unitDiv);
+    });
+}
+
+function findUnitById(uid) {
+    // Prefer local units (they definitely have items)
+    const local = myUnits.find(u => u.id === uid);
+    if (local) return local;
+
+    for (let sid in allUnits) {
+        const unit = (allUnits[sid] || []).find(u => u.id === uid);
+        if (unit) return unit;
+    }
+    return null;
+}
 
 
 
@@ -1280,6 +1722,70 @@ for (const u of p.units) {
   } else {
     panel.style.display = "none";
     buildingPanel.style.display = "none";
+  }
+
+
+
+// pick a "current unit" for pickup distance checks: first selected local unit
+const picker = myUnits.find(u => u.selected) || null;
+
+const visibleItems = groundItems.slice().sort((a,b)=>a.y-b.y);
+for (const it of visibleItems) {
+  const sx = canvas.width/2 + it.x - camera.x;
+  const sy = canvas.height/2 + it.y - camera.y;
+
+  // icon / fallback
+  const icon = itemIcons[it.name];
+  if (icon && icon.complete && icon.naturalWidth > 0) {
+    ctx.drawImage(icon, sx - GROUND_ITEM_SIZE/2, sy - GROUND_ITEM_SIZE/2, GROUND_ITEM_SIZE, GROUND_ITEM_SIZE);
+  } else {
+    ctx.fillStyle = "rgba(255,255,255,0.15)";
+    ctx.beginPath();
+    ctx.arc(sx, sy, 14, 0, Math.PI*2);
+    ctx.fill();
+    ctx.strokeStyle = "white";
+    ctx.stroke();
+  }
+
+  // name above item (always)
+  ctx.fillStyle = "white";
+  ctx.font = "12px monospace";
+  ctx.textAlign = "center";
+  ctx.fillText(it.name, sx, sy - 22);
+
+  // show pickup range indicator if a selected unit is near enough
+  if (picker && unitCanPickup(picker, it)) {
+    ctx.strokeStyle = "lime";
+    ctx.beginPath();
+    ctx.arc(sx, sy, 18, 0, Math.PI*2);
+    ctx.stroke();
+  }
+}
+
+  if (draggingPickup) {
+    const gi = groundItems.find(x => x.id === draggingPickup.groundItemId);
+    if (gi) {
+      const icon = itemIcons[gi.name];
+      const mx = dragMouse.x;
+      const my = dragMouse.y;
+
+      ctx.globalAlpha = 0.85;
+      if (icon && icon.complete && icon.naturalWidth > 0) {
+        ctx.drawImage(icon, mx - 16, my - 16, 32, 32);
+      } else {
+        ctx.fillStyle = "rgba(255,255,255,0.2)";
+        ctx.beginPath();
+        ctx.arc(mx, my, 14, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = "white";
+        ctx.stroke();
+        ctx.fillStyle = "white";
+        ctx.font = "10px monospace";
+        ctx.textAlign = "center";
+        ctx.fillText(gi.name, mx, my - 18);
+      }
+      ctx.globalAlpha = 1;
+    }
   }
 
 

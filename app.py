@@ -138,7 +138,8 @@ def spawn_unit(data):
         "ty": unit.get("y", 0),
         "hp": 100,
         "anim": "idle",
-        "dir": "000"
+        "dir": "000",
+        "items": [{"name": "Sword"}, {"name": "Shield"}]  # example
     }
 
     players[sid]["units"].append(new_unit)
