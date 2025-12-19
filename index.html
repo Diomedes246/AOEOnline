@@ -208,11 +208,11 @@ function onGlobalDragEnd(e) {
   if (!targetUnit.itemSlots) targetUnit.itemSlots = [null, null];
   if (targetUnit.itemSlots[slotIndex]) return; // must be empty
 
-  // equip + remove from ground
-  targetUnit.itemSlots[slotIndex] = { id: crypto.randomUUID(), name: gi.name };
-  groundItems = groundItems.filter(x => x.id !== gi.id);
-
-  renderUnitItems(targetUnit);
+  socket.emit("pickup_item", {
+    unitId: targetUnit.id,
+    slotIndex,
+    groundItemId: gi.id
+  });
 }
 
 
@@ -269,23 +269,14 @@ function renderUnitItems(unit) {
 
       const slotIndex = i;
 
-      // If dropping a ground item into this slot:
-      if (payload.type === "ground_item") {
-        const gi = groundItems.find(x => x.id === payload.groundItemId);
-        if (!gi) return;
-
-        // Must be close enough to pick up
-        if (!unitCanPickup(targetUnit, gi)) return;
-
-        // Slot must be empty
-        if (targetUnit.itemSlots[slotIndex]) return;
-
-        targetUnit.itemSlots[slotIndex] = { id: crypto.randomUUID(), name: gi.name };
-        groundItems = groundItems.filter(x => x.id !== gi.id);
-
-        renderUnitItems(targetUnit);
-        return;
-      }
+  if (payload.type === "ground_item") {
+    socket.emit("pickup_item", {
+      unitId: unit.id,
+      slotIndex: i,
+      groundItemId: payload.groundItemId
+    });
+    return;
+  }
 
       // If dropping a unit item (slot -> slot) (optional nice feature):
       if (payload.type === "unit_item") {
@@ -346,54 +337,28 @@ canvas.addEventListener("dragover", (e) => {
 canvas.addEventListener("drop", (e) => {
   e.preventDefault();
 
-  let payloadStr = e.dataTransfer.getData("application/json");
+  const payloadStr = e.dataTransfer.getData("application/json");
   if (!payloadStr) return;
 
   let payload;
-  try { payload = JSON.parse(payloadStr); }
-  catch { return; }
-
-  if (payload.type !== "unit_item") return;
-   // Allow moving a ground item around by dragging on canvas (optional)
-  if (payload.type === "ground_item") {
-    const gi = groundItems.find(x => x.id === payload.groundItemId);
-    if (!gi) return;
-    gi.x = wx;
-    gi.y = wy;
-    return;
-  }
-
-  const { unitId, slotIndex, item } = payload;
+  try { payload = JSON.parse(payloadStr); } catch { return; }
 
   // Convert screen -> world
   const wx = camera.x + e.clientX - canvas.width / 2;
   const wy = camera.y + e.clientY - canvas.height / 2;
 
-  // Find local unit (only allow dragging from your own units)
-  const u = myUnits.find(x => x.id === unitId);
-  if (!u || !u.itemSlots) return;
-
-  // Verify still in that slot
-  const slot = u.itemSlots[slotIndex];
-  if (!slot || slot.id !== item.id) return;
-
-  // Remove from unit slot
-  u.itemSlots[slotIndex] = null;
-
-  // Spawn ground item
-  groundItems.push({
-    id: crypto.randomUUID(),
-    name: item.name,
-    x: wx,
-    y: wy
-  });
-
-  // Refresh panel if this unit is the currently displayed one
-  renderUnitItems(u);
-
-  // OPTIONAL: emit to server so others see it
-  // socket.emit("drop_item", { item: { id: ..., name: item.name, x: wx, y: wy }, fromUnitId: unitId, slotIndex });
+  // Dropping equipment item onto world => SERVER creates ground item
+  if (payload.type === "unit_item") {
+    socket.emit("drop_item", {
+      unitId: payload.unitId,
+      slotIndex: payload.slotIndex,
+      x: wx,
+      y: wy
+    });
+    return;
+  }
 });
+
 
 
 
@@ -987,10 +952,11 @@ canvas.addEventListener("mouseup", (e) => {
   if (targetUnit.itemSlots[slotIndex]) return;
 
   // equip
-  targetUnit.itemSlots[slotIndex] = { id: crypto.randomUUID(), name: gi.name };
-  groundItems = groundItems.filter(x => x.id !== gi.id);
-
-  renderUnitItems(targetUnit);
+  socket.emit("pickup_item", {
+    unitId: targetUnit.id,
+    slotIndex,
+    groundItemId: gi.id
+  });
 });
 
 
@@ -1117,7 +1083,15 @@ const MAX_HEALTH = 100;
 /* ================= SOCKET STATE ================= */
 // Keep player positions/colors from state
 // Update remote units
+
+socket.on("ground_items", (items) => {
+  groundItems = items || [];
+});
+
+
+
 socket.on("state", state => {
+    if (state.ground_items) groundItems = state.ground_items;
 
     // Remove players who are no longer on the server
     for (const sid in players) {
@@ -1162,6 +1136,7 @@ socket.on("state", state => {
             queue: existing ? existing.queue : []
         };
     });
+    groundItems = state.ground_items || [];
 });
 
 
@@ -1178,6 +1153,12 @@ socket.on("unit_hp_update", ({ sid, unitId, hp }) => {
         const i = list.indexOf(u);
         if (i !== -1) list.splice(i, 1);
     }
+});
+
+socket.on("ground_items", (items) => {
+  groundItems = items || [];
+  // optional debug:
+  // console.log("ground_items update", groundItems.length);
 });
 
 socket.on("update_units", ({ sid, units }) => {
@@ -1288,6 +1269,20 @@ function removeDeadUnits(unitsArray) {
 }
 
 
+
+socket.on("ground_items", (items) => {
+  groundItems = items;
+});
+
+socket.on("unit_slots_update", ({ unitId, itemSlots }) => {
+  const u = myUnits.find(x => x.id === unitId);
+  if (!u) return;
+
+  u.itemSlots = itemSlots;
+
+  // refresh UI if currently showing this unit
+  if (currentItemsUnitId === unitId) renderUnitItems(u);
+});
 
 
 
