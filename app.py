@@ -4,6 +4,32 @@ import random
 import time
 import uuid
 import math
+import json, os, time
+from threading import Lock
+from pathlib import Path
+
+MAP_FILE = "map_objects.json"
+map_lock = Lock()
+
+# Each object: {id, type, kind, x, y, owner, rot, meta}
+map_objects = []
+
+def load_map():
+    global map_objects
+    if os.path.exists(MAP_FILE):
+        with open(MAP_FILE, "r", encoding="utf-8") as f:
+            map_objects = json.load(f)
+    else:
+        map_objects = []
+
+def save_map():
+    tmp = MAP_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(map_objects, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, MAP_FILE)
+
+load_map()
+
 
 app = Flask(__name__)
 socketio = SocketIO(app, cors_allowed_origins="*")
@@ -34,9 +60,6 @@ def make_default_slots():
         {"id": str(uuid.uuid4()), "name": "sword"},
         {"id": str(uuid.uuid4()), "name": "shield"}
     ]
-
-
-
 
 # Add global state for trees
 trees = []
@@ -90,7 +113,9 @@ def emit_state(to_sid=None):
         "players": players,
         "buildings": buildings,
         "trees": trees,
-        "ground_items": ground_items
+        "ground_items": ground_items,
+        "map_objects": map_objects
+
     }
     if to_sid:
         socketio.emit("state", state, to=to_sid)
@@ -98,7 +123,102 @@ def emit_state(to_sid=None):
         socketio.emit("state", state)
 
 
+
+
+
+
 # Socket events
+
+@app.route("/tiles_manifest")
+def tiles_manifest():
+    """
+    Returns available tile images from /static/tiles as:
+    { "tiles": ["building2", "tree", ...] }
+    """
+    tiles_dir = Path(app.root_path) / "static" / "tiles"
+    tiles = []
+
+    if tiles_dir.exists():
+        for name in os.listdir(tiles_dir):
+            # keep only images you want
+            if name.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+                stem = Path(name).stem  # "tree.png" -> "tree"
+                tiles.append(stem)
+
+    tiles.sort()
+    return {"tiles": tiles}
+
+@socketio.on("request_map")
+def request_map():
+    # send current persistent objects to this client
+    socketio.emit("map_objects", map_objects, to=request.sid)
+
+@socketio.on("place_map_object")
+def place_map_object(data):
+    sid = request.sid
+    obj_type = data.get("type")
+    kind = data.get("kind")
+    x = data.get("x")
+    y = data.get("y")
+    rot = data.get("rot", 0)
+
+    # ✅ meta exists ONLY inside this handler
+    meta_in = data.get("meta", {}) if isinstance(data, dict) else {}
+
+    # sanitize meta (only for tiles)
+    if obj_type == "tile":
+        collides = bool(meta_in.get("collides", False))
+
+        cw = int(meta_in.get("cw", 64) or 64)
+        ch = int(meta_in.get("ch", 64) or 64)
+        cw = max(8, min(512, cw))
+        ch = max(8, min(512, ch))
+
+        # ✅ KEEP scaled draw size
+        w = int(meta_in.get("w", 256) or 256)
+        h = int(meta_in.get("h", 256) or 256)
+        w = max(16, min(2048, w))
+        h = max(16, min(2048, h))
+
+        meta = {"collides": collides, "cw": cw, "ch": ch, "w": w, "h": h}
+    else:
+        meta = {}
+
+
+    new_obj = {
+        "id": str(uuid.uuid4()),
+        "type": obj_type,
+        "kind": kind,
+        "x": float(x),
+        "y": float(y),
+        "rot": int(rot),
+        "owner": sid,
+        "meta": meta,
+        "ts": time.time()
+    }
+
+    with map_lock:
+        map_objects.append(new_obj)
+        save_map()
+
+    socketio.emit("map_objects", map_objects)
+
+
+@socketio.on("delete_map_object")
+def delete_map_object(data):
+    obj_id = data.get("id")
+    if not obj_id:
+        return
+    with map_lock:
+        before = len(map_objects)
+        map_objects[:] = [o for o in map_objects if o.get("id") != obj_id]
+        if len(map_objects) != before:
+            save_map()
+    socketio.emit("map_objects", map_objects)
+
+
+
+
 @socketio.on("connect")
 def on_connect():
     sid = request.sid

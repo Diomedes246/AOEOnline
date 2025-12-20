@@ -66,6 +66,33 @@ canvas { display:block; }
     </div>
 </div>
 
+<div id="editorPanel" style="
+  position:fixed;
+  right:10px;
+  bottom:10px;
+  width:240px;
+  background:rgba(0,0,0,0.75);
+  color:white;
+  padding:10px;
+  border-radius:8px;
+  font-family:monospace;
+  z-index:1000;
+">
+  <button id="editorBtn" style="width:100%; height:36px;">Editor: OFF</button>
+ <div style="margin-top:10px;">
+  <div>Brush:</div>
+  <select id="brushSelect" style="width:100%; height:30px;">
+    <option value="" disabled selected>Loading tiles…</option>
+  </select>
+</div>
+  </div>
+  <div style="margin-top:10px; font-size:12px; opacity:0.9;">
+    Left click: place<br/>
+    Shift+Left click: delete nearest
+  </div>
+</div>
+
+
 
 <script>
 /* ================= SETUP ================= */
@@ -124,7 +151,7 @@ const ANIM_SPEED = 0.3;
 const UNIT_RADIUS = 18;
 const PLAYER_RADIUS = 20;
 const TREE_RADIUS = 140;
-const RESOURCE_RADIUS_COLLIDE = 28;
+const RESOURCE_RADIUS_COLLIDE = 15;
 
 // Buildings use rectangle collision
 const BUILD_COLLISION_PADDING = -50;
@@ -562,10 +589,57 @@ socket.on("server_trees", serverTrees => {
 });
 
 
+let editorCollisionEnabled = true;
+let editorCollisionW = 64;
+let editorCollisionH = 64;
+const COLLISION_STEP = 8;
+const COLLISION_MIN = 8;
+const COLLISION_MAX = 512;
+
+
+canvas.addEventListener("wheel", (e) => {
+  if (!editorMode) return;
+
+  e.preventDefault();
+
+  const delta = Math.sign(e.deltaY);
+
+  // SHIFT = scale the TILE DRAW SIZE (preview + placed size)
+  if (e.shiftKey) {
+    editorTileW = Math.max(
+      TILE_SCALE_MIN,
+      Math.min(TILE_SCALE_MAX, editorTileW - delta * TILE_SCALE_STEP)
+    );
+    editorTileH = Math.max(
+      TILE_SCALE_MIN,
+      Math.min(TILE_SCALE_MAX, editorTileH - delta * TILE_SCALE_STEP)
+    );
+    return;
+  }
+
+  // Normal wheel = scale COLLISION rectangle (existing)
+  editorCollisionW = Math.max(
+    COLLISION_MIN,
+    Math.min(COLLISION_MAX, editorCollisionW - delta * COLLISION_STEP)
+  );
+  editorCollisionH = Math.max(
+    COLLISION_MIN,
+    Math.min(COLLISION_MAX, editorCollisionH - delta * COLLISION_STEP)
+  );
+}, { passive: false });
+
+
+
+
 
 /* ================= RESOURCES ================= */
 const RESOURCE_RADIUS = 40;
 const HARVEST_TIME = 10000; // ms
+
+const RESOURCE_STOP_RADIUS    = PLAYER_RADIUS + RESOURCE_RADIUS_COLLIDE + 1; // 36
+const RESOURCE_HARVEST_RADIUS = RESOURCE_STOP_RADIUS + 4;                    // 40
+
+
 
 let resources = [];          // {id, x, y}
 let harvesting = null;       // {resourceId, startTime}
@@ -587,7 +661,7 @@ function spawnResources(){
 
   for(let r=0;r<rows;r++){
     for(let c=0;c<cols;c++){
-      if(Math.random() < 0.035){
+      if(Math.random() < 0.6){
         resources.push({
           id: id++,
           x: (c - r) * spacing,
@@ -599,136 +673,132 @@ function spawnResources(){
 }
 spawnResources();
 
-function resolveCircleCircle(a, ar, b, br) {
-    const dx = a.x - b.x;
-    const dy = a.y - b.y;
-    const dist = Math.hypot(dx, dy);
-    const minDist = ar + br;
-
-    // ---------- DEBUG DRAW ----------
-    if (DEBUG_COLLISIONS) {
-        const ax = canvas.width/2 + a.x - camera.x;
-        const ay = canvas.height/2 + a.y - camera.y;
-        const bx = canvas.width/2 + b.x - camera.x;
-        const by = canvas.height/2 + b.y - camera.y;
-
-        ctx.strokeStyle = "rgba(0,255,255,0.4)";
-        ctx.beginPath();
-        ctx.arc(ax, ay, ar, 0, Math.PI*2);
-        ctx.stroke();
-
-        ctx.strokeStyle = "rgba(255,0,0,0.4)";
-        ctx.beginPath();
-        ctx.arc(bx, by, br, 0, Math.PI*2);
-        ctx.stroke();
-    }
-    // ------------------------------
-
-    if (dist === 0 || dist >= minDist) return;
-
-    const overlap = minDist - dist;
-    const nx = dx / dist;
-    const ny = dy / dist;
-
-    // Apply push
-    a.x += nx * overlap;
-    a.y += ny * overlap;
-
-    // ---------- DEBUG PENETRATION ----------
-    if (DEBUG_COLLISIONS) {
-        const ax = canvas.width/2 + a.x - camera.x;
-        const ay = canvas.height/2 + a.y - camera.y;
-
-        ctx.strokeStyle = "yellow";
-        ctx.beginPath();
-        ctx.moveTo(ax, ay);
-        ctx.lineTo(ax + nx * overlap, ay + ny * overlap);
-        ctx.stroke();
-    }
-}
-
 function resolveCircleRect(unit, radius, rect) {
-    const left   = rect.x - BUILD_W/2 - BUILD_COLLISION_PADDING;
-    const right  = rect.x + BUILD_W/2 + BUILD_COLLISION_PADDING;
-    const top    = rect.y - BUILD_H/2 - BUILD_COLLISION_PADDING;
-    const bottom = rect.y + BUILD_H/2 + BUILD_COLLISION_PADDING;
+  const left   = rect.x - rect.w / 2;
+  const right  = rect.x + rect.w / 2;
+  const top    = rect.y - rect.h / 2;
+  const bottom = rect.y + rect.h / 2;
 
-    const closestX = Math.max(left, Math.min(unit.x, right));
-    const closestY = Math.max(top, Math.min(unit.y, bottom));
+  const closestX = Math.max(left, Math.min(unit.x, right));
+  const closestY = Math.max(top, Math.min(unit.y, bottom));
 
-    const dx = unit.x - closestX;
-    const dy = unit.y - closestY;
-    const dist = Math.hypot(dx, dy);
+  const dx = unit.x - closestX;
+  const dy = unit.y - closestY;
+  const dist = Math.hypot(dx, dy);
 
-    // ---------- DEBUG DRAW ----------
-    if (DEBUG_COLLISIONS) {
-        const ux = canvas.width/2 + unit.x - camera.x;
-        const uy = canvas.height/2 + unit.y - camera.y;
+  if (dist === 0 || dist >= radius) return;
 
-        ctx.strokeStyle = "rgba(255,0,0,0.4)";
-        ctx.strokeRect(canvas.width/2 + left - camera.x, canvas.height/2 + top - camera.y, right-left, bottom-top);
+  const overlap = radius - dist;
+  const nx = dx / dist;
+  const ny = dy / dist;
 
-        ctx.strokeStyle = "rgba(0,255,255,0.4)";
-        ctx.beginPath();
-        ctx.arc(ux, uy, radius, 0, Math.PI*2);
-        ctx.stroke();
-    }
-    // ------------------------------
-
-    if (dist === 0 || dist >= radius) return;
-
-    const overlap = radius - dist;
-    const nx = dx / dist;
-    const ny = dy / dist;
-
-    // Apply push
-    unit.x += nx * overlap;
-    unit.y += ny * overlap;
-
-    // ---------- DEBUG PENETRATION ----------
-    if (DEBUG_COLLISIONS) {
-        const ux = canvas.width/2 + unit.x - camera.x;
-        const uy = canvas.height/2 + unit.y - camera.y;
-
-        ctx.strokeStyle = "yellow";
-        ctx.beginPath();
-        ctx.moveTo(ux, uy);
-        ctx.lineTo(ux + nx * overlap, uy + ny * overlap);
-        ctx.stroke();
-    }
+  unit.x += nx * overlap;
+  unit.y += ny * overlap;
 }
+
+
+function resolveCircleCircle(unit, radius, cx, cy, cr) {
+  const dx = unit.x - cx;
+  const dy = unit.y - cy;
+  const dist = Math.hypot(dx, dy);
+  const minDist = radius + cr;
+
+  if (dist === 0 || dist >= minDist) return;
+
+  const overlap = minDist - dist;
+  const nx = dx / dist;
+  const ny = dy / dist;
+
+  unit.x += nx * overlap;
+  unit.y += ny * overlap;
+
+  if (DEBUG_COLLISIONS) {
+    const ux = canvas.width/2 + unit.x - camera.x;
+    const uy = canvas.height/2 + unit.y - camera.y;
+    drawCircleDebug(ux, uy, radius, "rgba(0,255,255,0.6)");
+    drawCircleDebug(canvas.width/2 + cx - camera.x, canvas.height/2 + cy - camera.y, cr, "rgba(255,0,0,0.35)");
+  }
+}
+
+function resolveCircleBuilding(unit, radius, b) {
+  const left   = b.x - BUILD_W / 2 - BUILD_COLLISION_PADDING;
+  const right  = b.x + BUILD_W / 2 + BUILD_COLLISION_PADDING;
+  const top    = b.y - BUILD_H / 2 - BUILD_COLLISION_PADDING;
+  const bottom = b.y + BUILD_H / 2 + BUILD_COLLISION_PADDING;
+
+  const closestX = Math.max(left, Math.min(unit.x, right));
+  const closestY = Math.max(top, Math.min(unit.y, bottom));
+
+  const dx = unit.x - closestX;
+  const dy = unit.y - closestY;
+  const dist = Math.hypot(dx, dy);
+
+  if (dist === 0 || dist >= radius) return;
+
+  const overlap = radius - dist;
+  const nx = dx / dist;
+  const ny = dy / dist;
+
+  unit.x += nx * overlap;
+  unit.y += ny * overlap;
+
+  if (DEBUG_COLLISIONS) {
+    drawRectDebug(
+      canvas.width/2 + (left+right)/2 - camera.x,
+      canvas.height/2 + (top+bottom)/2 - camera.y,
+      (right-left),
+      (bottom-top),
+      "rgba(255,0,0,0.35)"
+    );
+  }
+}
+
 
 function applyCollisions(u) {
-    // Trees
-    for (const t of trees) resolveCircleCircle(u, PLAYER_RADIUS, {x: t.x, y: t.y-150}, TREE_RADIUS);
+  // Trees (circle-circle)
+  for (const t of trees) {
+    resolveCircleCircle(u, PLAYER_RADIUS, t.x, t.y - 150, TREE_RADIUS);
+  }
 
-    // Resources
-    for (const r of resources) resolveCircleCircle(u, PLAYER_RADIUS, {x: r.x, y: r.y}, RESOURCE_RADIUS_COLLIDE);
+  // Resources (circle-circle)
+  for (const r of resources) {
+    resolveCircleCircle(u, PLAYER_RADIUS, r.x, r.y, RESOURCE_RADIUS_COLLIDE);
+  }
 
-    // Buildings
-    for (const b of buildings) resolveCircleRect(u, PLAYER_RADIUS, b);
+  // Buildings (circle-rect using BUILD_W/H)
+  for (const b of buildings) {
+    resolveCircleBuilding(u, PLAYER_RADIUS, b);
+  }
 
-    // Other local units
-    for (const other of myUnits) {
-        if (other === u) continue;
-        resolveCircleCircle(u, UNIT_RADIUS, other, UNIT_RADIUS);
+  // Tile collisions (keep your rect version)
+  for (const o of mapObjects) {
+    if (o.type !== "tile") continue;
+    if (!o.meta || !o.meta.collides) continue;
+
+    resolveCircleRect(u, PLAYER_RADIUS, {
+      x: o.x, y: o.y,
+      w: o.meta.cw, h: o.meta.ch
+    });
+  }
+
+  // Other local units (circle-circle)
+  for (const other of myUnits) {
+    if (other === u) continue;
+    resolveCircleCircle(u, UNIT_RADIUS, other.x, other.y, UNIT_RADIUS);
+  }
+
+  // Other players units (circle-circle)
+  for (const sid in players) {
+    if (sid === mySid) continue;
+    for (const opUnit of players[sid].units) {
+      resolveCircleCircle(u, PLAYER_RADIUS, opUnit.x, opUnit.y, UNIT_RADIUS);
     }
-
-    // Other players' units
-    for (const sid in players) {
-        if (sid === mySid) continue;
-        for (const opUnit of players[sid].units) {
-            resolveCircleCircle(u, PLAYER_RADIUS, opUnit, UNIT_RADIUS);
-        }
-    }
-
-    // Optional: other players as a single "main unit" collision
-    // for (const sid in players) {
-    //     if (sid === mySid) continue;
-    //     const op = players[sid];
-    //     resolveCircleCircle(u, PLAYER_RADIUS, {x: op.x, y: op.y}, PLAYER_RADIUS);
-    // }
+  }
 }
+
+
+
+  
 
 
 
@@ -828,6 +898,38 @@ function updateSelectedUnits() {
 canvas.addEventListener("mousedown", e => {
   const wx = camera.x + mouse.x - canvas.width / 2;
   const wy = camera.y + mouse.y - canvas.height / 2;
+
+    if (editorMode && e.button === 0) {
+    if (e.shiftKey) {
+      // delete nearest within radius
+      let nearest = null, best = 40;
+      for (const o of mapObjects) {
+        const d = Math.hypot(o.x - wx, o.y - wy);
+        if (d < best) { best = d; nearest = o; }
+      }
+      if (nearest) socket.emit("delete_map_object", { id: nearest.id });
+      return;
+    }
+
+const [type, kind] = brushSelect.value.split(":");
+
+socket.emit("place_map_object", {
+  type,
+  kind,
+  x: wx,
+  y: wy,
+  meta: type === "tile" ? {
+    collides: editorCollisionEnabled,
+    cw: editorCollisionW,
+    ch: editorCollisionH,
+    w: editorTileW,
+    h: editorTileH
+  } : {}
+});
+
+
+    return;
+  }
 
 if (e.button === 0) {
   const picker = getFirstSelectedUnit();
@@ -1006,13 +1108,24 @@ canvas.addEventListener("mouseup", e=>{
         const selectedUnits = myUnits.filter(u => u.selected);
 
         selectedUnits.forEach(u => {
-            u.targetResource = clickedResource ? clickedResource.id : null;
-            u.targetEnemy = null;          // stop attacking
-            u.tx = wx;
-            u.ty = wy;
-            u.manualMove = true;           // allow movement to override combat
-            harvesting = null;
-        });
+  u.targetEnemy = null;
+  harvesting = null;
+
+  if (clickedResource) {
+    // ✅ resource gather command
+    u.targetResource = clickedResource.id;
+    u.manualMove = false;            // ✅ IMPORTANT: don't get stuck in manualMove
+    u.tx = clickedResource.x;        // move toward resource center
+    u.ty = clickedResource.y;
+  } else {
+    // normal move command
+    u.targetResource = null;
+    u.tx = wx;
+    u.ty = wy;
+    u.manualMove = true;
+  }
+});
+
 
         
     }
@@ -1285,6 +1398,24 @@ socket.on("unit_slots_update", ({ unitId, itemSlots }) => {
 });
 
 
+let editorMode = false;
+let mapObjects = []; // persistent objects from server
+
+const editorBtn = document.getElementById("editorBtn");
+const brushSelect = document.getElementById("brushSelect");
+
+editorBtn.onclick = () => {
+  editorMode = !editorMode;
+  editorBtn.textContent = editorMode ? "Editor: ON" : "Editor: OFF";
+};
+
+socket.emit("request_map");
+socket.on("map_objects", (objs) => {
+  mapObjects = objs || [];
+});
+
+
+
 
 /* ================= UPDATE ================= */
 
@@ -1347,22 +1478,45 @@ function update(){
   }
 
 
-        // --- Resource harvesting ---
-        if(u.targetResource !== null){
-            const r = resources.find(r => r.id === u.targetResource);
-            if(r){
-                const dist = Math.hypot(u.x - r.x, u.y - r.y);
-                if(dist < RESOURCE_RADIUS){
-                    if(!harvesting) harvesting = { resourceId: r.id, startTime: now };
-                    else if(now - harvesting.startTime >= HARVEST_TIME){
-                        resources = resources.filter(rr => rr.id !== r.id);
-                        resourceCount++;
-                        harvesting = null;
-                        u.targetResource = null;
-                    }
-                } else harvesting = null;
-            } else u.targetResource = null;
+     // --- Resource harvesting ---
+if (u.targetResource !== null) {
+  const r = resources.find(rr => rr.id === u.targetResource);
+  if (!r) {
+    u.targetResource = null;
+    u.harvesting = null;
+  } else {
+    const dx = r.x - u.x;
+    const dy = r.y - u.y;
+    const dist = Math.hypot(dx, dy);
+
+    if (dist > RESOURCE_STOP_RADIUS) {
+      const speed = 2.6;
+      u.x += (dx / dist) * Math.min(speed, dist);
+      u.y += (dy / dist) * Math.min(speed, dist);
+      u.anim = "walk";
+      u.dir = getDirKey(dx, dy);
+      u.frame = (u.frame + ANIM_SPEED) % WALK_FRAMES;
+    } else {
+      u.anim = "idle";
+      u.frame = (u.frame + ANIM_SPEED) % IDLE_FRAMES;
+
+      // ✅ harvest check uses harvest radius
+      if (dist <= RESOURCE_HARVEST_RADIUS) {
+        if (!u.harvesting || u.harvesting.resourceId !== r.id) {
+          u.harvesting = { resourceId: r.id, startTime: now };
+        } else if (now - u.harvesting.startTime >= HARVEST_TIME) {
+          resources = resources.filter(rr => rr.id !== r.id);
+          resourceCount++;
+          u.harvesting = null;
+          u.targetResource = null;
         }
+      }
+    }
+  }
+  continue;
+}
+
+
 
         // --- Combat & auto-chase ---
         if(!u.manualMove){
@@ -1450,6 +1604,40 @@ const unitStates = myUnits.map(u => ({
 
 
 
+function clamp01(v){ return Math.max(0, Math.min(1, v)); }
+
+function drawHarvestBars() {
+  const now = performance.now();
+
+  for (const u of myUnits) {
+    if (!u.harvesting) continue;
+
+    const r = resources.find(rr => rr.id === u.harvesting.resourceId);
+    if (!r) continue;
+
+    const t = clamp01((now - u.harvesting.startTime) / HARVEST_TIME);
+
+    const sx = canvas.width/2 + r.x - camera.x;
+    const sy = canvas.height/2 + r.y - camera.y;
+
+    const w = 46, h = 6;
+    const x = sx - w/2;
+    const y = sy - 34;
+
+    // background
+    ctx.fillStyle = "rgba(0,0,0,0.6)";
+    ctx.fillRect(x, y, w, h);
+
+    // fill
+    ctx.fillStyle = "rgba(0,255,0,0.85)";
+    ctx.fillRect(x, y, w * t, h);
+
+    // border
+    ctx.strokeStyle = "white";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x, y, w, h);
+  }
+}
 
 
 
@@ -1473,7 +1661,33 @@ const unitStates = myUnits.map(u => ({
 
 
 
+function renderYForWorld(obj) {
+  if (obj._type === "building") return obj.y + BUILD_H / 2;
 
+  if (obj._type === "tile") {
+    const defH = TILE_DEFS[obj.kind]?.h ?? 256;
+    const h = obj.meta?.h ?? defH;
+    return obj.y + h / 2;
+  }
+
+  if (obj._type === "tree") return obj.y;
+  if (obj._type === "resource") return obj.y;
+  if (obj._type === "ground") return obj.y;
+  return obj.y;
+}
+
+
+
+function renderYForUnit(u) {
+  return u.y + SPRITE_H/4; // feet-ish anchor
+}
+
+function mouseWorld() {
+  return {
+    x: camera.x + mouse.x - canvas.width / 2,
+    y: camera.y + mouse.y - canvas.height / 2
+  };
+}
 
 
 /* ================= BACKGROUND ================= */
@@ -1501,6 +1715,106 @@ buildingImg.src = "static/building.png";
 const BUILD_W = 506;
 const BUILD_H = 370;
 
+// ===== EDITOR BRUSH DEFINITIONS (DYNAMIC) =====
+let TILE_DEFS = {};     // kind -> {src,w,h}
+let tileImages = {};    // kind -> Image
+
+// You can set defaults here (or extend later with per-tile sizes)
+const DEFAULT_TILE_W = 256;
+const DEFAULT_TILE_H = 256;
+
+let editorTileW = 256;
+let editorTileH = 256;
+
+const TILE_SCALE_STEP = 16;
+const TILE_SCALE_MIN = 16;
+const TILE_SCALE_MAX = 2048;
+
+function prettyName(stem) {
+  // "building2" -> "Building2", "dark_road" -> "Dark Road"
+  return stem
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function rebuildBrushSelect(tileNames) {
+  const brushSelect = document.getElementById("brushSelect");
+  if (!brushSelect) {
+    console.error("brushSelect not found in DOM (id='brushSelect').");
+    return;
+  }
+
+  // keep the first option (Building)
+  brushSelect.innerHTML = "";
+
+  const optBuilding = document.createElement("option");
+  optBuilding.value = "building:building";
+  optBuilding.textContent = "Building";
+  brushSelect.appendChild(optBuilding);
+
+  for (const name of tileNames) {
+    const opt = document.createElement("option");
+    opt.value = `tile:${name}`;
+    opt.textContent = `Tile: ${prettyName(name)}`;
+    brushSelect.appendChild(opt);
+  }
+
+  if (tileNames.length === 0) {
+    const opt = document.createElement("option");
+    opt.disabled = true;
+    opt.textContent = "No tiles found in /static/tiles";
+    brushSelect.appendChild(opt);
+  }
+}
+
+async function loadTilesFromServer() {
+  const brushSelect = document.getElementById("brushSelect");
+  if (!brushSelect) {
+    console.error("brushSelect not found; delaying tile load until DOM exists.");
+    return;
+  }
+
+  try {
+    const res = await fetch("/tiles_manifest", { cache: "no-store" });
+    if (!res.ok) throw new Error(`tiles_manifest HTTP ${res.status}`);
+    const data = await res.json();
+
+    const tileNames = Array.isArray(data.tiles) ? data.tiles : [];
+
+    TILE_DEFS = {};
+    tileImages = {};
+
+    for (const name of tileNames) {
+      TILE_DEFS[name] = { src: `static/tiles/${name}.png`, w: 256, h: 256 };
+      const img = new Image();
+      img.src = TILE_DEFS[name].src;
+      tileImages[name] = img;
+    }
+
+    rebuildBrushSelect(tileNames);
+  } catch (err) {
+    console.error("Failed to load tiles manifest:", err);
+
+    // fallback UI (safe)
+    brushSelect.innerHTML = "";
+    const optBuilding = document.createElement("option");
+    optBuilding.value = "building:building";
+    optBuilding.textContent = "Building";
+    brushSelect.appendChild(optBuilding);
+
+    const optFail = document.createElement("option");
+    optFail.disabled = true;
+    optFail.textContent = "Failed to load tiles";
+    brushSelect.appendChild(optFail);
+  }
+}
+
+
+window.addEventListener("DOMContentLoaded", () => {
+  loadTilesFromServer();
+});
+
+
 function draw() {
   update();
   ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -1508,156 +1822,275 @@ function draw() {
   // Draw background
   drawBackground();
 
-  // Draw resources
-  for (const r of resources) {
-    const x = canvas.width / 2 + r.x - camera.x;
-    const y = canvas.height / 2 + r.y - camera.y;
-    ctx.drawImage(resourceImg, x - RES_W / 2, y - RES_H / 2, RES_W, RES_H);
+const worldRenderables = [];
+
+// Trees
+for (const t of trees) worldRenderables.push({ _type:"tree", x:t.x, y:t.y });
+
+// Resources
+for (const r of resources) worldRenderables.push({ _type:"resource", ...r });
+
+// Ground items
+for (const it of groundItems) worldRenderables.push({ _type:"ground", ...it });
+
+// Editor map objects
+for (const o of mapObjects) {
+  worldRenderables.push({
+    _type: o.type === "building" ? "building" : "tile",
+    ...o
+  });
+}
+
+// RTS buildings array
+for (const b of buildings) worldRenderables.push({ _type:"building", ...b });
+
+// Sort bottom-last
+worldRenderables.sort((a,b) => {
+  const ay = renderYForWorld(a), by = renderYForWorld(b);
+  if (ay !== by) return ay - by;
+  return (a.x - b.x);
+});
+
+// Draw world (NO units here)
+for (const obj of worldRenderables) {
+  const sx = canvas.width/2 + obj.x - camera.x;
+  const sy = canvas.height/2 + obj.y - camera.y;
+
+  if (obj._type === "tree") {
+    ctx.drawImage(treeImg, sx - TREE_W/2, sy - TREE_H, TREE_W, TREE_H);
+    continue;
   }
 
-  // Draw harvesting progress
-  if (harvesting) {
-    const r = resources.find(r => r.id === harvesting.resourceId);
-    if (r) {
-      const progress = Math.min(1, (performance.now() - harvesting.startTime) / HARVEST_TIME);
-      const x = canvas.width / 2 + r.x - camera.x;
-      const y = canvas.height / 2 + r.y - camera.y - 40;
-
-      ctx.fillStyle = "black";
-      ctx.fillRect(x - 30, y, 60, 6);
-      ctx.fillStyle = "lime";
-      ctx.fillRect(x - 30, y, 60 * progress, 6);
-    }
+  if (obj._type === "resource") {
+    ctx.drawImage(resourceImg, sx - RES_W/2, sy - RES_H/2, RES_W, RES_H);
+    continue;
   }
 
-  // Draw trees (depth-sorted)
-  const visibleTrees = trees.slice().sort((a, b) => a.y - b.y);
-  for (const t of visibleTrees) {
-    const x = canvas.width / 2 + t.x - camera.x;
-    const y = canvas.height / 2 + t.y - camera.y;
-    ctx.drawImage(treeImg, x - TREE_W / 2, y - TREE_H, TREE_W, TREE_H);
+  if (obj._type === "ground") {
+    const icon = itemIcons[obj.name];
+    if (icon && icon.complete && icon.naturalWidth > 0) {
+      ctx.drawImage(icon, sx - GROUND_ITEM_SIZE/2, sy - GROUND_ITEM_SIZE/2, GROUND_ITEM_SIZE, GROUND_ITEM_SIZE);
+    }
+    continue;
   }
 
-  // Draw other players
-// Other players
-for (const sid in players) {
-    if (sid === mySid) continue;
-    const p = players[sid];
+if (obj._type === "tile") {
+  const def = TILE_DEFS[obj.kind];
+  const img = tileImages[obj.kind];
+  if (!def) continue;
+
+const w = obj.meta?.w ?? def.w;
+const h = obj.meta?.h ?? def.h;
 
 
+  if (img && img.complete && img.naturalWidth > 0) {
+    ctx.drawImage(img, sx - w / 2, sy - h / 2, w, h);
+  }
 
-        let frames, framesShadow, drawFrame;
+  // ✅ debug draw tile collision (rect centered on tile x,y)
+  if (DEBUG_COLLISIONS && obj.meta?.collides) {
+    ctx.strokeStyle = "rgba(0,255,255,0.4)";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 4]);
+    ctx.strokeRect(
+      sx - (obj.meta.cw ?? 0) / 2,
+      sy - (obj.meta.ch ?? 0) / 2,
+      (obj.meta.cw ?? 0),
+      (obj.meta.ch ?? 0)
+    );
+    ctx.setLineDash([]);
+  }
 
-for (const u of p.units) {
-    if (u.anim === "attack") {
-        frames = playerSprites.attack[u.dir];
-        framesShadow = playerSprites.attackshadow[u.dir];
-        u.renderAttackFrame += ANIM_SPEED;
-        if (u.renderAttackFrame >= ATTACK_ANIM_FRAMES) u.renderAttackFrame = 0;
-        drawFrame = Math.floor(u.renderAttackFrame);
-    } else if (u.anim === "walk") {
-        frames = playerSprites.walk[u.dir];
-        framesShadow = playerSprites.walkshadow[u.dir];
-        u.renderFrame += ANIM_SPEED;
-        if (u.renderFrame >= WALK_FRAMES) u.renderFrame = 0;
-        drawFrame = Math.floor(u.renderFrame);
-    } else { // idle
-        frames = playerSprites.idle[u.dir];
-        framesShadow = playerSprites.idleshadow[u.dir];
-        u.renderFrame += ANIM_SPEED;
-        if (u.renderFrame >= IDLE_FRAMES) u.renderFrame = 0;
-        drawFrame = Math.floor(u.renderFrame);
-    }
-
-        const img = frames[drawFrame];
-        const imgShadow = framesShadow[drawFrame];
-
-        const x = canvas.width/2 + u.x - camera.x;
-        const y = canvas.height/2 + u.y - camera.y;
-
-        if (imgShadow && imgShadow.complete) ctx.drawImage(imgShadow, x - SPRITE_W/2, y - SPRITE_H/2, SPRITE_W, SPRITE_H);
-        if (img && img.complete) ctx.drawImage(img, x - SPRITE_W/2, y - SPRITE_H/2, SPRITE_W, SPRITE_H);
-
-        // Health bar
-        const barWidth = 40;
-        const barHeight = 5;
-        ctx.fillStyle = "red";
-        ctx.fillRect(x - barWidth / 2, y - 30, barWidth, barHeight);
-        ctx.fillStyle = "green";
-        ctx.fillRect(x - barWidth / 2, y - 30, barWidth * (u.hp / 100), barHeight);
-    }
+  continue;
 }
 
 
-  // Draw my units
-  for (const u of myUnits) {
-    const x = canvas.width / 2 + u.x - camera.x;
-    const y = canvas.height / 2 + u.y - camera.y;
+  if (obj._type === "building") {
+    ctx.drawImage(buildingImg, sx - BUILD_W/2, sy - BUILD_H/2, BUILD_W, BUILD_H);
 
-    let frames, framesShadow;
-    if (u.anim === "walk") {
-      frames = playerSprites.walk[u.dir];
-      framesShadow = playerSprites.walkshadow[u.dir];
-
-      if (u.frame >= WALK_FRAMES) u.frame = 0;
-    } else if (u.anim === "idle") {
-      frames = playerSprites.idle[u.dir];
-      framesShadow = playerSprites.idleshadow[u.dir];
-
-      if (u.frame >= IDLE_FRAMES) u.frame = 0;
-    } else if (u.anim === "attack") {
-      frames = playerSprites.attack[u.dir];
-      framesShadow = playerSprites.attackshadow[u.dir];
-      u.attackFrame += ANIM_SPEED;
-      if (u.attackFrame >= ATTACK_ANIM_FRAMES) u.attackFrame = 0;
-    } else {
-      frames = playerSprites.idle[u.dir];
-      framesShadow = playerSprites.idleshadow[u.dir];
-    }
-
-    const img = frames[u.anim === "attack" ? Math.floor(u.attackFrame) : Math.floor(u.frame)];
-    const imgShadow = framesShadow[u.anim === "attack" ? Math.floor(u.attackFrame) : Math.floor(u.frame)];
-
-    if (imgShadow && imgShadow.complete) ctx.drawImage(imgShadow, x - SPRITE_W / 2, y - SPRITE_H / 2, SPRITE_W, SPRITE_H);
-    if (img && img.complete) ctx.drawImage(img, x - SPRITE_W / 2, y - SPRITE_H / 2, SPRITE_W, SPRITE_H);
-
-    // Health bar
-    const barWidth = 40;
-    const barHeight = 5;
-    ctx.fillStyle = "red";
-    ctx.fillRect(x - barWidth / 2, y - 30, barWidth, barHeight);
-    ctx.fillStyle = "green";
-    ctx.fillRect(x - barWidth / 2, y - 30, barWidth * (u.hp / 100), barHeight);
-
-    // Name and selection circle
-    ctx.fillStyle = "white";
-    ctx.font = "12px monospace";
-    ctx.textAlign = "center";
-    ctx.fillText("YOU", x, y - 40);
-
-    if (u.selected) {
-      ctx.strokeStyle = "yellow";
-      ctx.beginPath();
-      ctx.arc(x, y + SPRITE_H / 4, 18, 0, Math.PI * 2);
-      ctx.stroke();
-    }
-  }
-
-  // Draw buildings
-  for (const b of buildings) {
-    const bx = canvas.width / 2 + b.x - camera.x;
-    const by = canvas.height / 2 + b.y - camera.y;
-
-    ctx.drawImage(buildingImg, bx - BUILD_W / 2, by - BUILD_H / 2, BUILD_W, BUILD_H);
-
-    if (b.selected) {
+    if (obj.selected) {
       ctx.strokeStyle = "cyan";
       ctx.lineWidth = 2;
       ctx.setLineDash([5, 5]);
-      ctx.strokeRect(bx - BUILD_W / 2, by - BUILD_H / 2, BUILD_W, BUILD_H);
+      ctx.strokeRect(sx - BUILD_W/2, sy - BUILD_H/2, BUILD_W, BUILD_H);
       ctx.setLineDash([]);
     }
+    continue;
   }
+}
+
+// ===== Editor placement preview (ghost) =====
+if (editorMode) {
+  const bs = document.getElementById("brushSelect");
+  if (bs && bs.value) {
+    const { x: wx, y: wy } = mouseWorld();
+    const sx = canvas.width / 2 + wx - camera.x;
+    const sy = canvas.height / 2 + wy - camera.y;
+
+    const [type, kind] = bs.value.split(":");
+
+    ctx.save();
+    ctx.globalAlpha = 0.55;
+
+    if (type === "building" && kind === "building") {
+      // building ghost
+      if (buildingImg && buildingImg.complete && buildingImg.naturalWidth > 0) {
+        ctx.drawImage(buildingImg, sx - BUILD_W / 2, sy - BUILD_H / 2, BUILD_W, BUILD_H);
+      } else {
+        ctx.strokeStyle = "white";
+        ctx.strokeRect(sx - BUILD_W / 2, sy - BUILD_H / 2, BUILD_W, BUILD_H);
+      }
+    } else if (type === "tile") {
+      const def = TILE_DEFS[kind];
+      const img = tileImages[kind];
+
+    const w = editorTileW;
+    const h = editorTileH;
+
+      if (img && img.complete && img.naturalWidth > 0) {
+        ctx.drawImage(img, sx - w / 2, sy - h / 2, w, h);
+      } else {
+        // fallback ghost box
+        ctx.strokeStyle = "white";
+        ctx.strokeRect(sx - w / 2, sy - h / 2, w, h);
+        ctx.fillStyle = "white";
+        ctx.font = "10px monospace";
+        ctx.textAlign = "center";
+        ctx.fillText(kind || "tile", sx, sy);
+      }
+    }
+
+    // extra outline so it’s readable
+    ctx.globalAlpha = 1;
+    ctx.setLineDash([4, 4]);
+    ctx.lineWidth = 2;
+
+    if (type === "building") {
+      ctx.strokeStyle = "cyan";
+      ctx.strokeRect(sx - BUILD_W / 2, sy - BUILD_H / 2, BUILD_W, BUILD_H);
+    } else if (type === "tile") {
+    const w = editorTileW;
+    const h = editorTileH;
+      ctx.strokeStyle = "lime";
+      ctx.strokeRect(sx - w / 2, sy - h / 2, w, h);
+    }
+
+    // draw collision preview
+if (type === "tile" && editorCollisionEnabled) {
+  ctx.save();
+  ctx.strokeStyle = "rgba(0,255,255,0.9)";
+  ctx.setLineDash([6, 4]);
+  ctx.lineWidth = 2;
+  ctx.strokeRect(
+    sx - editorCollisionW / 2,
+    sy - editorCollisionH / 2,
+    editorCollisionW,
+    editorCollisionH
+  );
+  ctx.restore();
+}
+
+
+if (type === "tile" && !editorCollisionEnabled) {
+  ctx.fillStyle = "rgba(255,0,0,0.6)";
+  ctx.font = "12px monospace";
+  ctx.textAlign = "center";
+  ctx.fillText("NO COLLISION", sx, sy - 40);
+}
+
+
+    ctx.restore();
+  }
+}
+
+
+
+const unitRenderables = [];
+
+// my units
+for (const u of myUnits) unitRenderables.push({ _owner: mySid, ...u });
+
+// other players units
+for (const sid in players) {
+  if (sid === mySid) continue;
+  for (const u of (players[sid].units || [])) {
+    unitRenderables.push({ _owner: sid, ...u });
+  }
+}
+
+unitRenderables.sort((a,b) => renderYForUnit(a) - renderYForUnit(b));
+
+for (const u of unitRenderables) {
+  const sx = canvas.width/2 + u.x - camera.x;
+  const sy = canvas.height/2 + u.y - camera.y;
+  const isMine = (u._owner === mySid);
+
+  let frames, framesShadow, frameIndex;
+
+  if (!isMine) {
+    // remote uses renderFrame counters
+    if (u.anim === "attack") {
+      frames = playerSprites.attack[u.dir];
+      framesShadow = playerSprites.attackshadow[u.dir];
+      u.renderAttackFrame = (u.renderAttackFrame ?? 0) + ANIM_SPEED;
+      if (u.renderAttackFrame >= ATTACK_ANIM_FRAMES) u.renderAttackFrame = 0;
+      frameIndex = Math.floor(u.renderAttackFrame);
+    } else if (u.anim === "walk") {
+      frames = playerSprites.walk[u.dir];
+      framesShadow = playerSprites.walkshadow[u.dir];
+      u.renderFrame = (u.renderFrame ?? 0) + ANIM_SPEED;
+      if (u.renderFrame >= WALK_FRAMES) u.renderFrame = 0;
+      frameIndex = Math.floor(u.renderFrame);
+    } else {
+      frames = playerSprites.idle[u.dir];
+      framesShadow = playerSprites.idleshadow[u.dir];
+      u.renderFrame = (u.renderFrame ?? 0) + ANIM_SPEED;
+      if (u.renderFrame >= IDLE_FRAMES) u.renderFrame = 0;
+      frameIndex = Math.floor(u.renderFrame);
+    }
+  } else {
+    // local uses frame/attackFrame
+    if (u.anim === "attack") {
+      frames = playerSprites.attack[u.dir];
+      framesShadow = playerSprites.attackshadow[u.dir];
+      frameIndex = Math.floor(u.attackFrame || 0);
+    } else if (u.anim === "walk") {
+      frames = playerSprites.walk[u.dir];
+      framesShadow = playerSprites.walkshadow[u.dir];
+      frameIndex = Math.floor(u.frame || 0);
+    } else {
+      frames = playerSprites.idle[u.dir];
+      framesShadow = playerSprites.idleshadow[u.dir];
+      frameIndex = Math.floor(u.frame || 0);
+    }
+  }
+
+  const img = frames?.[frameIndex];
+  const sh  = framesShadow?.[frameIndex];
+
+  if (sh && sh.complete) ctx.drawImage(sh, sx - SPRITE_W/2, sy - SPRITE_H/2, SPRITE_W, SPRITE_H);
+  if (img && img.complete) ctx.drawImage(img, sx - SPRITE_W/2, sy - SPRITE_H/2, SPRITE_W, SPRITE_H);
+
+  // HP bar
+  ctx.fillStyle = "red";
+  ctx.fillRect(sx - 20, sy - 30, 40, 5);
+  ctx.fillStyle = "green";
+  ctx.fillRect(sx - 20, sy - 30, 40 * ((u.hp ?? 100) / 100), 5);
+
+  // selection ring for my units
+  if (isMine && u.selected) {
+    ctx.strokeStyle = "yellow";
+    ctx.beginPath();
+    ctx.arc(sx, sy + SPRITE_H/4, 18, 0, Math.PI*2);
+    ctx.stroke();
+  }
+}
+
+
+
+
+
+
 
   // Hover outlines
   if (hoveredResource) {
@@ -1684,6 +2117,10 @@ for (const u of p.units) {
     ctx.stroke();
     ctx.setLineDash([]);
   }
+
+
+  drawHarvestBars();
+
 
   // Building placement preview
   if (buildMode) {
@@ -1787,9 +2224,11 @@ for (const it of visibleItems) {
 
 
   // HUD update (safe use of selectedUnits)
-  hud.innerText = `Camera: ${camera.x | 0}, ${camera.y | 0}
+hud.innerText = `Camera: ${camera.x|0}, ${camera.y|0}
 Resources: ${resourceCount}
-Selected: ${selectedUnits.length}`;
+Selected: ${selectedUnits.length}
+TileSize: ${editorTileW}x${editorTileH}  Collision: ${editorCollisionEnabled ? `${editorCollisionW}x${editorCollisionH}` : "OFF"}`;
+
 
   requestAnimationFrame(draw);
 }
