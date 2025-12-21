@@ -493,5 +493,56 @@
     "owner": "VfZ0fze0D1wM6bmaAAAB",
     "meta": {},
     "ts": 1766181312.5711796
+  },
+  {
+    "id": "27f94e92-4f44-4a52-9a72-b7eb2a6e3a80",
+    "type": "tile",
+    "kind": "Cylindrical Tank A - Size 1 - Gray",
+    "x": -128.0,
+    "y": -121.5,
+    "rot": 0,
+    "owner": "AeB_sAQZ3Y1AiYPcAAAH",
+    "meta": {
+      "collides": true,
+      "cw": 144,
+      "ch": 144,
+      "w": 192,
+      "h": 192
+    },
+    "ts": 1766224688.6674657
+  },
+  {
+    "id": "a5393bed-effe-4a80-a0b1-3299aca4fda1",
+    "type": "tile",
+    "kind": "Cylindrical Tank A - Size 1 - Gray",
+    "x": 140.5,
+    "y": -142.5,
+    "rot": 0,
+    "owner": "G0HzNDMKiaiMCG0wAAAH",
+    "meta": {
+      "collides": true,
+      "cw": 96,
+      "ch": 96,
+      "w": 176,
+      "h": 176
+    },
+    "ts": 1766248018.9313629
+  },
+  {
+    "id": "cce89452-ceae-46cd-a887-e89bd7e07e88",
+    "type": "tile",
+    "kind": "Cylindrical Tank A - Size 1 - Gray",
+    "x": 273.5,
+    "y": -147.5,
+    "rot": 0,
+    "owner": "G0HzNDMKiaiMCG0wAAAH",
+    "meta": {
+      "collides": true,
+      "cw": 96,
+      "ch": 96,
+      "w": 176,
+      "h": 176
+    },
+    "ts": 1766248034.8496485
   }
 ]

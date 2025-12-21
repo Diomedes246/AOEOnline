@@ -84,13 +84,63 @@ canvas { display:block; }
   <select id="brushSelect" style="width:100%; height:30px;">
     <option value="" disabled selected>Loading tiles…</option>
   </select>
-</div>
-  </div>
   <div style="margin-top:10px; font-size:12px; opacity:0.9;">
     Left click: place<br/>
-    Shift+Left click: delete nearest
+    Shift+Left click: delete<br/>
+    c: toggle collision<br/>
+    Scroll: collision size<br/>
+    Shift+Scroll: tile size 
+  </div>
+  <button id="entityBtn" style="width:100%; height:36px; margin-top:8px;">
+  Entity: OFF
+</button>
+</div>
+</div>
+<div id="entityPanel" style="
+  display:none;
+  position:fixed;
+  left:20px;
+  bottom:160px;
+  width:320px;
+  background:rgba(0,0,0,0.85);
+  color:white;
+  padding:12px;
+  border-radius:10px;
+  border:2px solid #777;
+  font-family:monospace;
+  z-index:2000;
+">
+  <div style="display:flex; justify-content:space-between; align-items:center;">
+    <div style="font-weight:bold;">Entity Inspector</div>
+    <button id="entityCloseBtn" style="height:26px;">X</button>
+  </div>
+
+  <div style="margin-top:10px; font-size:12px; opacity:0.8;" id="entityIdLine"></div>
+
+  <div style="margin-top:10px;">
+    <div style="font-size:12px; opacity:0.8;">Title</div>
+    <input id="entityTitleInput" style="width:100%; height:30px;"/>
+  </div>
+
+  <div style="margin-top:10px;">
+    <div style="font-size:12px; opacity:0.8;">Biography</div>
+    <textarea id="entityBioInput" style="width:100%; height:90px;"></textarea>
+  </div>
+
+  <div style="margin-top:10px;">
+    <div style="display:flex; gap:8px; align-items:center;">
+      <div style="font-size:12px; opacity:0.8; flex:1;">Actions</div>
+      <button id="entityAddActionBtn" style="height:26px;">+ Add</button>
+    </div>
+    <div id="entityActionsList" style="margin-top:8px; display:flex; flex-wrap:wrap; gap:6px;"></div>
+  </div>
+
+  <div style="margin-top:10px; display:flex; gap:8px;">
+    <button id="entitySaveBtn" style="flex:1; height:34px;">Save</button>
+    <button id="entityDeleteBtn" style="flex:1; height:34px;">Delete</button>
   </div>
 </div>
+
 
 
 
@@ -104,7 +154,13 @@ const buildBtn = document.getElementById("buildBtn");
 const socket = io();
 
 let mySid = null;
-socket.on("connect", ()=> mySid = socket.id);
+socket.on("connect", () => {
+  mySid = socket.id;
+
+  // ✅ request initial map after connection is established
+  socket.emit("request_map");
+});
+
 
 function resize(){
   canvas.width = window.innerWidth;
@@ -134,8 +190,32 @@ function drawRectDebug(x, y, w, h, color) {
 let camera = {x:0,y:0};
 const camSpeed = 12;
 const keys = {};
-document.addEventListener("keydown", e=>keys[e.key]=true);
-document.addEventListener("keyup", e=>keys[e.key]=false);
+document.addEventListener("keydown", (e) => {
+  keys[e.key] = true;
+
+  // Toggle collision on/off while in editor
+  if (!e.repeat && editorMode && (e.key === "c" || e.key === "C")) {
+    editorCollisionEnabled = !editorCollisionEnabled;
+  }
+});
+
+document.addEventListener("keyup", (e) => {
+  keys[e.key] = false;
+});
+
+
+function setEntityInspectorEditable(canEdit) {
+  entityTitleInput.disabled = !canEdit;
+  entityBioInput.disabled = !canEdit;
+
+  entityAddActionBtn.disabled = !canEdit;
+  entitySaveBtn.disabled = !canEdit;
+  entityDeleteBtn.disabled = !canEdit;
+
+  // Optional visual cue
+  entityTitleInput.style.opacity = canEdit ? "1" : "0.7";
+  entityBioInput.style.opacity   = canEdit ? "1" : "0.7";
+}
 
 
 /* ================= PLAYER SPRITES ================= */
@@ -386,6 +466,158 @@ canvas.addEventListener("drop", (e) => {
   }
 });
 
+
+
+let entityMode = false;
+let selectedEntityId = null;
+
+const entityBtn = document.getElementById("entityBtn");
+const entityPanelEl = document.getElementById("entityPanel");
+const entityCloseBtn = document.getElementById("entityCloseBtn");
+const entityIdLine = document.getElementById("entityIdLine");
+const entityTitleInput = document.getElementById("entityTitleInput");
+const entityBioInput = document.getElementById("entityBioInput");
+const entityActionsList = document.getElementById("entityActionsList");
+const entityAddActionBtn = document.getElementById("entityAddActionBtn");
+const entitySaveBtn = document.getElementById("entitySaveBtn");
+const entityDeleteBtn = document.getElementById("entityDeleteBtn");
+
+entityBtn.onclick = () => {
+  entityMode = !entityMode;
+  entityBtn.textContent = entityMode ? "Entity: ON" : "Entity: OFF";
+};
+
+entityCloseBtn.onclick = () => {
+  entityPanelEl.style.display = "none";
+  selectedEntityId = null;
+};
+
+function ensureEntityMeta(o) {
+  if (!o.meta) o.meta = {};
+  if (!o.meta.entity) o.meta.entity = true;
+  if (typeof o.meta.title !== "string") o.meta.title = "";
+  if (typeof o.meta.bio !== "string") o.meta.bio = "";
+  if (!Array.isArray(o.meta.actions)) o.meta.actions = [];
+}
+
+function getDefaultEntityTitle(o) {
+  if (o.type === "building") return "Building";
+  if (o.type === "tile") return o.kind ? prettyName(o.kind) : "Tile";
+  return "Entity";
+}
+
+function openEntityInspector(o) {
+  ensureEntityMeta(o);
+  selectedEntityId = o.id;
+
+  entityIdLine.textContent =
+    `id: ${o.id} | type: ${o.type}${o.kind ? " | kind: " + o.kind : ""}`;
+
+  entityTitleInput.value = o.meta.title || getDefaultEntityTitle(o);
+  entityBioInput.value = o.meta.bio || "";
+
+  renderEntityActions(o);
+
+  // ✅ Only allow editing TILE title/bio when editor mode is ON
+  const isTile = (o.type === "tile");
+  const canEdit = !(isTile && !editorMode);
+  setEntityInspectorEditable(canEdit);
+
+  // Optional: make it obvious why it's locked
+  if (!canEdit) {
+    entityIdLine.textContent += "  |  (read-only: enable Editor to edit tile text)";
+  }
+
+  entityPanelEl.style.display = "block";
+}
+
+function renderEntityActions(o) {
+  entityActionsList.innerHTML = "";
+  ensureEntityMeta(o);
+
+  for (let i = 0; i < o.meta.actions.length; i++) {
+    const a = o.meta.actions[i];
+
+    const wrap = document.createElement("div");
+    wrap.style.display = "flex";
+    wrap.style.gap = "4px";
+    wrap.style.alignItems = "center";
+
+    const btn = document.createElement("button");
+    btn.textContent = a.label || `Action ${i+1}`;
+    btn.style.height = "26px";
+
+    // Clicking action in inspector triggers an event (so you can hook gameplay)
+    btn.onclick = () => {
+      socket.emit("entity_action", { entityId: o.id, actionId: a.id, label: a.label });
+      // optional local feedback:
+      // console.log("entity_action", o.id, a);
+    };
+
+    const del = document.createElement("button");
+    del.textContent = "✕";
+    del.style.height = "26px";
+    del.onclick = () => {
+      o.meta.actions.splice(i, 1);
+      renderEntityActions(o);
+    };
+
+    wrap.appendChild(btn);
+    wrap.appendChild(del);
+    entityActionsList.appendChild(wrap);
+  }
+}
+entityAddActionBtn.onclick = () => {
+  if (!selectedEntityId) return;
+  const o = mapObjects.find(x => x.id === selectedEntityId);
+  if (!o) return;
+
+  // If tile + editor off => no edits
+  if (o.type === "tile" && !editorMode) return;
+
+  ensureEntityMeta(o);
+
+  const label = prompt("Action label?", "Inspect");
+  if (!label) return;
+
+  o.meta.actions.push({ id: crypto.randomUUID(), label });
+  renderEntityActions(o);
+};
+
+
+entitySaveBtn.onclick = () => {
+  if (!selectedEntityId) return;
+  const o = mapObjects.find(x => x.id === selectedEntityId);
+  if (!o) return;
+
+  if (o.type === "tile" && !editorMode) return;
+
+  ensureEntityMeta(o);
+  o.meta.title = entityTitleInput.value || "";
+  o.meta.bio = entityBioInput.value || "";
+  socket.emit("update_map_object", { id: o.id, meta: o.meta });
+  entityPanelEl.style.display = "none";
+};
+
+entityDeleteBtn.onclick = () => {
+  if (!selectedEntityId) return;
+  const o = mapObjects.find(x => x.id === selectedEntityId);
+  if (!o) return;
+
+  if (o.type === "tile" && !editorMode) return;
+
+  socket.emit("delete_map_object", { id: selectedEntityId });
+  entityPanelEl.style.display = "none";
+  selectedEntityId = null;
+};
+
+
+entityDeleteBtn.onclick = () => {
+  if (!selectedEntityId) return;
+  socket.emit("delete_map_object", { id: selectedEntityId });
+  entityPanelEl.style.display = "none";
+  selectedEntityId = null;
+};
 
 
 
@@ -893,11 +1125,42 @@ function updateSelectedUnits() {
 }
 
 
+function hitTestMapObject(wx, wy) {
+  // pick topmost by render order: scan from end (mapObjects drawn in order)
+  for (let i = mapObjects.length - 1; i >= 0; i--) {
+    const o = mapObjects[i];
+    if (!o.meta || !o.meta.entity) continue;
+
+    if (o.type === "building") {
+      // building uses BUILD_W/H
+      if (Math.abs(wx - o.x) < BUILD_W / 2 && Math.abs(wy - o.y) < BUILD_H / 2) return o;
+    } else if (o.type === "tile") {
+      const def = TILE_DEFS[o.kind] || { w: 256, h: 256 };
+      const w = o.meta?.w ?? def.w;
+      const h = o.meta?.h ?? def.h;
+      if (Math.abs(wx - o.x) < w / 2 && Math.abs(wy - o.y) < h / 2) return o;
+    }
+  }
+  return null;
+}
+
+
 
 
 canvas.addEventListener("mousedown", e => {
   const wx = camera.x + mouse.x - canvas.width / 2;
   const wy = camera.y + mouse.y - canvas.height / 2;
+
+  // ✅ Click entity to inspect (works even when editorMode is off)
+if (e.button === 0) {
+  const hitEntity = hitTestMapObject(wx, wy);
+  if (hitEntity) {
+    openEntityInspector(hitEntity);
+    e.preventDefault();
+    return;
+  }
+}
+
 
     if (editorMode && e.button === 0) {
     if (e.shiftKey) {
@@ -913,19 +1176,27 @@ canvas.addEventListener("mousedown", e => {
 
 const [type, kind] = brushSelect.value.split(":");
 
-socket.emit("place_map_object", {
-  type,
-  kind,
-  x: wx,
-  y: wy,
-  meta: type === "tile" ? {
-    collides: editorCollisionEnabled,
-    cw: editorCollisionW,
-    ch: editorCollisionH,
-    w: editorTileW,
-    h: editorTileH
-  } : {}
-});
+let meta = (type === "tile") ? {
+  collides: editorCollisionEnabled,
+  cw: editorCollisionW,
+  ch: editorCollisionH,
+  w: editorTileW,
+  h: editorTileH
+} : {};
+
+if (entityMode) {
+  meta = {
+    ...meta,
+    entity: true,
+    title: (type === "tile") ? prettyName(kind) : "Building",
+    bio: "",
+    actions: []
+  };
+}
+
+
+socket.emit("place_map_object", { type, kind, x: wx, y: wy, meta });
+
 
 
     return;
@@ -965,6 +1236,7 @@ if (e.button === 0) {
     socket.emit("place_building", { x: wx, y: wy });
     return;
   }
+
 
 
 
@@ -1415,6 +1687,18 @@ socket.on("map_objects", (objs) => {
 });
 
 
+function drawEntityTitle(obj, sx, sy) {
+  if (!obj?.meta?.entity) return;
+
+  const title = (obj.meta.title && obj.meta.title.trim())
+    ? obj.meta.title
+    : getDefaultEntityTitle(obj);
+
+  ctx.fillStyle = "white";
+  ctx.font = "12px monospace";
+  ctx.textAlign = "center";
+  ctx.fillText(title, sx, sy - 40);
+}
 
 
 /* ================= UPDATE ================= */
@@ -1747,11 +2031,6 @@ function rebuildBrushSelect(tileNames) {
   // keep the first option (Building)
   brushSelect.innerHTML = "";
 
-  const optBuilding = document.createElement("option");
-  optBuilding.value = "building:building";
-  optBuilding.textContent = "Building";
-  brushSelect.appendChild(optBuilding);
-
   for (const name of tileNames) {
     const opt = document.createElement("option");
     opt.value = `tile:${name}`;
@@ -1900,7 +2179,7 @@ const h = obj.meta?.h ?? def.h;
     );
     ctx.setLineDash([]);
   }
-
+  drawEntityTitle(obj, sx, sy);
   continue;
 }
 
@@ -2120,6 +2399,9 @@ for (const u of unitRenderables) {
 
 
   drawHarvestBars();
+
+
+
 
 
   // Building placement preview

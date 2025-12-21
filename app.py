@@ -148,81 +148,48 @@ def tiles_manifest():
     tiles.sort()
     return {"tiles": tiles}
 
+
 @socketio.on("request_map")
-def request_map():
-    # send current persistent objects to this client
-    socketio.emit("map_objects", map_objects, to=request.sid)
+def on_request_map():
+    sid = request.sid
+    socketio.emit("map_objects", map_objects, to=sid)
+
 
 @socketio.on("place_map_object")
 def place_map_object(data):
-    sid = request.sid
-    obj_type = data.get("type")
-    kind = data.get("kind")
-    x = data.get("x")
-    y = data.get("y")
-    rot = data.get("rot", 0)
-
-    # ✅ meta exists ONLY inside this handler
-    meta_in = data.get("meta", {}) if isinstance(data, dict) else {}
-
-    # sanitize meta (only for tiles)
-    if obj_type == "tile":
-        collides = bool(meta_in.get("collides", False))
-
-        cw = int(meta_in.get("cw", 64) or 64)
-        ch = int(meta_in.get("ch", 64) or 64)
-        cw = max(8, min(512, cw))
-        ch = max(8, min(512, ch))
-
-        # ✅ KEEP scaled draw size
-        w = int(meta_in.get("w", 256) or 256)
-        h = int(meta_in.get("h", 256) or 256)
-        w = max(16, min(2048, w))
-        h = max(16, min(2048, h))
-
-        meta = {"collides": collides, "cw": cw, "ch": ch, "w": w, "h": h}
-    else:
-        meta = {}
-
-
-    new_obj = {
-        "id": str(uuid.uuid4()),
-        "type": obj_type,
-        "kind": kind,
-        "x": float(x),
-        "y": float(y),
-        "rot": int(rot),
-        "owner": sid,
-        "meta": meta,
-        "ts": time.time()
+    obj = {
+        "id": data.get("id") or str(uuid.uuid4()),
+        "type": data.get("type"),
+        "kind": data.get("kind"),
+        "x": float(data.get("x", 0)),
+        "y": float(data.get("y", 0)),
+        "meta": data.get("meta") or {}
     }
-
-    with map_lock:
-        map_objects.append(new_obj)
-        save_map()
-
+    map_objects.append(obj)
     socketio.emit("map_objects", map_objects)
 
+@socketio.on("update_map_object")
+def update_map_object(data):
+    oid = data.get("id")
+    meta = data.get("meta") or {}
+    for o in map_objects:
+        if o["id"] == oid:
+            o["meta"] = {**(o.get("meta") or {}), **meta}  # merge
+            break
+    socketio.emit("map_objects", map_objects)
 
 @socketio.on("delete_map_object")
 def delete_map_object(data):
-    obj_id = data.get("id")
-    if not obj_id:
-        return
-    with map_lock:
-        before = len(map_objects)
-        map_objects[:] = [o for o in map_objects if o.get("id") != obj_id]
-        if len(map_objects) != before:
-            save_map()
+    oid = data.get("id")
+    global map_objects
+    map_objects = [o for o in map_objects if o["id"] != oid]
     socketio.emit("map_objects", map_objects)
-
-
 
 
 @socketio.on("connect")
 def on_connect():
     sid = request.sid
-
+    socketio.emit("map_objects", map_objects, to=sid)
     players[sid] = {
         "x": 0,
         "y": 0,
