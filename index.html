@@ -151,13 +151,14 @@ const ctx = canvas.getContext("2d");
 const hud = document.getElementById("hud");
 const panel = document.getElementById("panel");
 const buildBtn = document.getElementById("buildBtn");
-const socket = io();
+const socket = io({autoConnect: false});
 
 let mySid = null;
 socket.on("connect", () => {
   mySid = socket.id;
 
   // ✅ request initial map after connection is established
+  socket.emit("request_state");
   socket.emit("request_map");
 });
 
@@ -612,15 +613,6 @@ entityDeleteBtn.onclick = () => {
 };
 
 
-entityDeleteBtn.onclick = () => {
-  if (!selectedEntityId) return;
-  socket.emit("delete_map_object", { id: selectedEntityId });
-  entityPanelEl.style.display = "none";
-  selectedEntityId = null;
-};
-
-
-
 
 
 const playerSprites = {
@@ -719,28 +711,7 @@ function getUnitTargetOffset(idx, total) {
 
 
 /* ================= LOCAL UNITS ================= */
-let myUnits = [
-  {
-    id: crypto.randomUUID(),   // ✅ ADD THIS
-    x: 0, y: 0,
-    tx: 0, ty: 0,
-    selected: false,
-    targetResource: null,
-    anim: "idle",
-    frame: 0,
-    dir: "000",
-    lastX: 0,
-    lastY: 0,
-    hp: UNIT_MAX_HEALTH,
-    attackCooldown: 0,
-    attackFrame: 0,
-    manualMove: false,
-    itemSlots: [
-  { id: crypto.randomUUID(), name: "sword" },
-  { id: crypto.randomUUID(), name: "shield" }
-]
-  }
-];
+let myUnits = [];
 
 
 for(const u of myUnits){
@@ -820,6 +791,9 @@ socket.on("server_trees", serverTrees => {
     trees = serverTrees;
 });
 
+socket.connect();
+
+
 
 let editorCollisionEnabled = true;
 let editorCollisionW = 64;
@@ -861,6 +835,59 @@ canvas.addEventListener("wheel", (e) => {
 }, { passive: false });
 
 
+function mergeUnitsPreserveFrames(localUnits, serverUnits) {
+  const byId = new Map(localUnits.map(u => [u.id, u]));
+  const merged = [];
+
+  for (const su0 of (serverUnits || [])) {
+    const existing = byId.get(su0.id);
+    const su = {
+      ...su0,
+      anim: su0.anim || "idle",
+      dir: String(su0.dir ?? "000").padStart(3,"0"),
+      hp: (su0.hp ?? existing?.hp ?? UNIT_MAX_HEALTH),
+      tx:   (su0.tx ?? su0.x),
+      ty:   (su0.ty ?? su0.y),
+    };
+
+    let lu = byId.get(su.id);
+if (!lu) {
+  lu = {
+    ...su,
+    frame: 0,
+    attackFrame: 0,
+    renderFrame: 0,
+    renderAttackFrame: 0,
+    lastX: su.x,
+    lastY: su.y,
+    selected: false,
+    manualMove: false,
+
+    // ✅ ADD THESE
+    targetEnemy: null,
+    attackCooldown: ATTACK_COOLDOWN, // allow immediate attack
+    harvesting: null,
+  };
+} else {
+      // update authoritative fields
+      lu.x = su.x; lu.y = su.y;
+      lu.tx = su.tx; lu.ty = su.ty;
+      lu.hp = su.hp;
+      lu.dir = su.dir;
+
+      if (lu.anim !== su.anim) {
+        lu.anim = su.anim;
+        lu.frame = 0;
+        lu.attackFrame = 0;
+        lu.renderFrame = 0;
+        lu.renderAttackFrame = 0;
+      }
+    }
+    merged.push(lu);
+  }
+
+  return merged;
+}
 
 
 
@@ -982,6 +1009,17 @@ function resolveCircleBuilding(unit, radius, b) {
       (bottom-top),
       "rgba(255,0,0,0.35)"
     );
+  }
+}
+
+function advanceLocalAnim(u) {
+  if (u.anim === "attack") {
+    u.attackFrame = ((u.attackFrame ?? 0) + ANIM_SPEED) % ATTACK_ANIM_FRAMES;
+  } else if (u.anim === "walk") {
+    u.frame = ((u.frame ?? 0) + ANIM_SPEED) % WALK_FRAMES;
+  } else {
+    // idle (default)
+    u.frame = ((u.frame ?? 0) + ANIM_SPEED) % IDLE_FRAMES;
   }
 }
 
@@ -1469,61 +1507,68 @@ const MAX_HEALTH = 100;
 // Keep player positions/colors from state
 // Update remote units
 
-socket.on("ground_items", (items) => {
-  groundItems = items || [];
-});
 
 
 
-socket.on("state", state => {
-    if (state.ground_items) groundItems = state.ground_items;
+socket.on("state", (state) => {
+  console.log("STATE: before merge myUnits", myUnits.length,
+            "server me.units", state.players?.[mySid]?.units?.length);
 
-    // Remove players who are no longer on the server
-    for (const sid in players) {
-        if (!state.players[sid] || !state.players[sid].units.length) {
-            delete players[sid];
-        }
+  if (state.ground_items) groundItems = state.ground_items;
+
+  // ✅ FIRST: sync my own units from server (adopt server ids)
+  const me = state.players?.[mySid];
+  if (me && Array.isArray(me.units)) {
+    myUnits = mergeUnitsPreserveFrames(myUnits, me.units);
+  }
+
+  for (const sid in players){
+          const first = players[sid].units[0];
+  if (first) { players[sid].x = first.x; players[sid].y = first.y; }
+  }
+
+
+  // existing: remove players no longer on server
+  for (const sid in players) {
+    if (!state.players[sid] || !state.players[sid].units || state.players[sid].units.length === 0) {
+      delete players[sid];
+    }
+  }
+
+  // ✅ sync other players as you already do (but using same merge helper)
+  for (const sid in state.players) {
+
+    if (sid === mySid) continue;
+    const sp = state.players[sid];
+
+    if (!sp.units || sp.units.length === 0) {
+      delete players[sid];
+      continue;
     }
 
-    // Update or add players
-    for (const sid in state.players) {
-        if (sid === mySid) continue;
+    if (!players[sid]) players[sid] = { x: 0, y: 0, color: "#fff", units: [] };
 
-        const serverPlayer = state.players[sid];
-        if (!serverPlayer.units || serverPlayer.units.length === 0) {
-            // Don't add dead players
-            delete players[sid];
-            continue;
-        }
+    players[sid].x = sp.x;
+    players[sid].y = sp.y;
+    players[sid].color = sp.color;
 
-        if (!players[sid]) players[sid] = { x: 0, y: 0, color: "#fff", units: [] };
+    players[sid].units = mergeUnitsPreserveFrames(players[sid].units || [], sp.units);
+  }
 
-        players[sid].x = serverPlayer.x;
-        players[sid].y = serverPlayer.y;
-        players[sid].color = serverPlayer.color;
-        players[sid].units = serverPlayer.units.map(u => ({
-            ...u,
-            renderFrame: 0,
-            renderAttackFrame: 0
-        }));
-    }
+  // buildings...
+  buildings = state.buildings.map(sb => {
+    const existing = buildings.find(b => b.x === sb.x && b.y === sb.y && b.owner === sb.owner);
+    return {
+      ...sb,
+      selected: existing ? existing.selected : false,
+      queue: existing ? existing.queue : []
+    };
+  });
 
-    // Update buildings as before
-    buildings = state.buildings.map(sb => {
-        const existing = buildings.find(b =>
-            b.x === sb.x &&
-            b.y === sb.y &&
-            b.owner === sb.owner
-        );
-        return {
-            ...sb,
-            selected: existing ? existing.selected : false,
-            queue: existing ? existing.queue : []
-        };
-    });
-    groundItems = state.ground_items || [];
+  groundItems = state.ground_items || [];
 });
 
+    
 
 socket.on("unit_hp_update", ({ sid, unitId, hp }) => {
     const list = sid === mySid ? myUnits : players[sid]?.units;
@@ -1547,58 +1592,28 @@ socket.on("ground_items", (items) => {
 });
 
 socket.on("update_units", ({ sid, units }) => {
-    if (!players[sid]) players[sid] = { units: [] };
+  if (sid === mySid) return;
 
-    const localUnits = players[sid].units;
+  // ✅ if server says this player has no units, remove them immediately
+  if (!units || units.length === 0) {
+    delete players[sid];
+    return;
+  }
 
-    for (const su of units) {
-        let lu = localUnits.find(u => u.id === su.id);
+  if (!players[sid]) players[sid] = { x:0, y:0, color:"#fff", units: [] };
 
-        if (!lu) {
-            // New unit from server
-            localUnits.push({
-                ...su,
-                renderFrame: 0,
-                renderAttackFrame: 0,
-                selected: false
-            });
-            continue;
-        }
+  players[sid].units = mergeUnitsPreserveFrames(players[sid].units || [], units);
 
-        // Always update authoritative fields
-        lu.x = su.x;
-        lu.y = su.y;
-        lu.tx = su.tx;
-        lu.ty = su.ty;
-        lu.hp = su.hp; 
-        lu.dir = su.dir;
-
-        if (lu.anim !== su.anim) {
-            lu.anim = su.anim;
-            lu.renderFrame = 0;
-            lu.renderAttackFrame = 0;
-        }
-
-        // Patch server ID if missing
-        if (lu.id == null) lu.id = su.id;
-    }
-
-    if (sid === mySid) {
-        for (let i = 0; i < units.length; i++) {
-            if (myUnits[i] && myUnits[i].id !== units[i].id) {
-                myUnits[i].id = units[i].id; // ensure id matches server
-            }
-            myUnits[i].hp = units[i].hp; // also patch HP immediately
-        }
-    }
-
-
-
-    // Only remove units that server truly removed
-    players[sid].units = localUnits.filter(lu =>
-        units.some(su => su.id === lu.id)
-    );
+  // keep hover point synced
+  const first = players[sid].units[0];
+  if (first) {
+    players[sid].x = first.x;
+    players[sid].y = first.y;
+  }
 });
+
+
+
 
 
 
@@ -1655,9 +1670,7 @@ function removeDeadUnits(unitsArray) {
 
 
 
-socket.on("ground_items", (items) => {
-  groundItems = items;
-});
+
 
 socket.on("unit_slots_update", ({ unitId, itemSlots }) => {
   const u = myUnits.find(x => x.id === unitId);
@@ -1681,7 +1694,6 @@ editorBtn.onclick = () => {
   editorBtn.textContent = editorMode ? "Editor: ON" : "Editor: OFF";
 };
 
-socket.emit("request_map");
 socket.on("map_objects", (objs) => {
   mapObjects = objs || [];
 });
@@ -1705,6 +1717,8 @@ function drawEntityTitle(obj, sx, sy) {
 
 
 function update(){
+    if (!mySid) return;
+    if (!myUnits || myUnits.length === 0) return; // wait for server state
     // --- CAMERA ---
     if(keys.w) camera.y -= camSpeed;
     if(keys.s) camera.y += camSpeed;
@@ -1750,14 +1764,17 @@ function update(){
           u.y += (dy / dist) * Math.min(speed, dist);
           u.anim = "walk";
           u.dir = getDirKey(dx, dy);
-          u.frame = (u.frame + ANIM_SPEED) % WALK_FRAMES;
+      
       } else {
           u.x = targetX; 
           u.y = targetY; 
           u.manualMove = false;
           u.anim = "idle";
-          u.frame = (u.frame + ANIM_SPEED) % IDLE_FRAMES;
+          
       }
+      advanceLocalAnim(u);
+      u.lastX = u.x;
+      u.lastY = u.y;
       continue;
   }
 
@@ -1779,10 +1796,10 @@ if (u.targetResource !== null) {
       u.y += (dy / dist) * Math.min(speed, dist);
       u.anim = "walk";
       u.dir = getDirKey(dx, dy);
-      u.frame = (u.frame + ANIM_SPEED) % WALK_FRAMES;
+     
     } else {
       u.anim = "idle";
-      u.frame = (u.frame + ANIM_SPEED) % IDLE_FRAMES;
+  
 
       // ✅ harvest check uses harvest radius
       if (dist <= RESOURCE_HARVEST_RADIUS) {
@@ -1797,69 +1814,82 @@ if (u.targetResource !== null) {
       }
     }
   }
+       advanceLocalAnim(u);
+      u.lastX = u.x;
+      u.lastY = u.y;
   continue;
 }
 
 
 
         // --- Combat & auto-chase ---
-        if(!u.manualMove){
-            if(!u.targetEnemy || !players[u.targetEnemy.sid]?.units[u.targetEnemy.idx]?.hp){
-                u.targetEnemy = null;
-            }
-            if(!u.targetEnemy){
-                const nearest = findNearestEnemy(u);
-                if(nearest){
-                    const dist = Math.hypot(u.x - nearest.x, u.y - nearest.y);
-                    if(dist <= 200) u.targetEnemy = nearest;
-                }
-            }
+        // --- Combat & auto-chase ---
+if (!u.manualMove) {
 
-         if(u.targetEnemy){
-const enemyPlayer = players[u.targetEnemy.sid];
-if(!enemyPlayer) { u.targetEnemy = null; continue; }
+  // validate current targetEnemy by unitId
+  if (u.targetEnemy) {
+    const enemyPlayer = players[u.targetEnemy.sid];
+    if (!enemyPlayer || !enemyPlayer.units || enemyPlayer.units.length === 0) {
+      u.targetEnemy = null;
+    } else {
+      const enemyUnit = enemyPlayer.units.find(eu => eu.id === u.targetEnemy.unitId);
+      if (!enemyUnit || (enemyUnit.hp ?? 0) <= 0) u.targetEnemy = null;
+    }
+  }
 
-const enemy = enemyPlayer.units.find(unit => unit.id === u.targetEnemy.unitId);
-if(!enemy || enemy.hp <= 0){
-    u.targetEnemy = null;
-    continue;
-}
+  // acquire target if none
+  if (!u.targetEnemy) {
+    const nearest = findNearestEnemy(u);
+    if (nearest) {
+      const dist = Math.hypot(u.x - nearest.x, u.y - nearest.y);
+      if (dist <= 200) u.targetEnemy = nearest;
+    }
+  }
 
-    const dx = enemy.x - u.x;
-    const dy = enemy.y - u.y;
-    const dist = Math.hypot(dx, dy);
+  // engage target
+  if (u.targetEnemy) {
+    const enemyPlayer = players[u.targetEnemy.sid];
+    const enemy = enemyPlayer?.units?.find(eu => eu.id === u.targetEnemy.unitId);
 
-    if(dist > UNIT_ATTACK_RANGE){
+    if (!enemy || (enemy.hp ?? 0) <= 0) {
+      u.targetEnemy = null;
+    } else {
+      const dx = enemy.x - u.x;
+      const dy = enemy.y - u.y;
+      const dist = Math.hypot(dx, dy);
+
+      if (dist > UNIT_ATTACK_RANGE) {
         const moveSpeed = 1.2;
         u.x += (dx / dist) * moveSpeed;
         u.y += (dy / dist) * moveSpeed;
         u.anim = "walk";
         u.dir = getDirKey(dx, dy);
-        u.frame = (u.frame + ANIM_SPEED) % WALK_FRAMES;
-    } else {
+      } else {
         u.anim = "attack";
-        u.attackFrame = (u.attackFrame + ANIM_SPEED) % ATTACK_ANIM_FRAMES;
-        if(u.attackCooldown >= ATTACK_COOLDOWN){
-            socket.emit("attack_unit", {
-                targetSid: u.targetEnemy.sid,
-                unitId: u.targetEnemy.unitId,
-                damage: UNIT_ATTACK_DPS / 60
-            });
-            u.attackCooldown = 0;
+        if (u.attackCooldown >= ATTACK_COOLDOWN) {
+          console.log("ATTACK", u.id, "->", u.targetEnemy.sid, u.targetEnemy.unitId);
+          socket.emit("attack_unit", {
+            targetSid: u.targetEnemy.sid,
+            unitId: u.targetEnemy.unitId,
+            damage: UNIT_ATTACK_DPS / 60
+          });
+          u.attackCooldown = 0;
         }
+      }
     }
-            } else if(u.anim !== "idle"){
-                u.anim = "idle";
-                u.frame = (u.frame + ANIM_SPEED) % IDLE_FRAMES;
-            }
-        }
+  } else {
+    if (u.anim !== "idle") u.anim = "idle";
+  }
+}
 
-        // --- Cooldowns ---
-        if(u.attackCooldown < ATTACK_COOLDOWN) u.attackCooldown += 16.66;
+// --- Cooldowns ---
+if (u.attackCooldown < ATTACK_COOLDOWN) u.attackCooldown += 16.66;
 
+// ✅ ALWAYS advance animation frames based on current anim
+advanceLocalAnim(u);
 
-        u.lastX = u.x;
-        u.lastY = u.y;
+u.lastX = u.x;
+u.lastY = u.y;
     }
 
     if(DEBUG_COLLISIONS){
@@ -1877,10 +1907,12 @@ const unitStates = myUnits.map(u => ({
     tx: u.tx,
     ty: u.ty,
     anim: u.anim,
-    dir: u.dir
+    dir: u.dir,
+    hp: u.hp
 }));
     socket.emit("update_units", { units: unitStates });
 }
+
 
 
 
@@ -1931,16 +1963,7 @@ function drawHarvestBars() {
 /*Outside update loop*/
 
 
-// Update all myUnits
-const unitStates = myUnits.map(u => ({
-    id: u.id,              // ⭐ REQUIRED
-    x: u.x,
-    y: u.y,
-    tx: u.tx,
-    ty: u.ty,
-    anim: u.anim,
-    dir: u.dir
-}));
+
 
 
 
@@ -2286,28 +2309,29 @@ if (type === "tile" && !editorCollisionEnabled) {
 
 const unitRenderables = [];
 
-// my units
-for (const u of myUnits) unitRenderables.push({ _owner: mySid, ...u });
+// my units (reference)
+for (const u of myUnits) unitRenderables.push({ owner: mySid, ref: u });
 
-// other players units
+// other players units (reference)
 for (const sid in players) {
   if (sid === mySid) continue;
   for (const u of (players[sid].units || [])) {
-    unitRenderables.push({ _owner: sid, ...u });
+    unitRenderables.push({ owner: sid, ref: u });
   }
 }
 
-unitRenderables.sort((a,b) => renderYForUnit(a) - renderYForUnit(b));
+unitRenderables.sort((a,b) => renderYForUnit(a.ref) - renderYForUnit(b.ref));
 
-for (const u of unitRenderables) {
+for (const item of unitRenderables) {
+  const u = item.ref;
+  const isMine = (item.owner === mySid);
+
   const sx = canvas.width/2 + u.x - camera.x;
   const sy = canvas.height/2 + u.y - camera.y;
-  const isMine = (u._owner === mySid);
 
   let frames, framesShadow, frameIndex;
 
   if (!isMine) {
-    // remote uses renderFrame counters
     if (u.anim === "attack") {
       frames = playerSprites.attack[u.dir];
       framesShadow = playerSprites.attackshadow[u.dir];
@@ -2328,7 +2352,6 @@ for (const u of unitRenderables) {
       frameIndex = Math.floor(u.renderFrame);
     }
   } else {
-    // local uses frame/attackFrame
     if (u.anim === "attack") {
       frames = playerSprites.attack[u.dir];
       framesShadow = playerSprites.attackshadow[u.dir];
@@ -2356,7 +2379,7 @@ for (const u of unitRenderables) {
   ctx.fillStyle = "green";
   ctx.fillRect(sx - 20, sy - 30, 40 * ((u.hp ?? 100) / 100), 5);
 
-  // selection ring for my units
+  // selection ring
   if (isMine && u.selected) {
     ctx.strokeStyle = "yellow";
     ctx.beginPath();

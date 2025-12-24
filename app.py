@@ -157,34 +157,50 @@ def on_request_map():
 
 @socketio.on("place_map_object")
 def place_map_object(data):
-    obj = {
-        "id": data.get("id") or str(uuid.uuid4()),
-        "type": data.get("type"),
-        "kind": data.get("kind"),
-        "x": float(data.get("x", 0)),
-        "y": float(data.get("y", 0)),
-        "meta": data.get("meta") or {}
-    }
-    map_objects.append(obj)
+    with map_lock:
+        obj = {
+            "id": data.get("id") or str(uuid.uuid4()),
+            "type": data.get("type"),
+            "kind": data.get("kind"),
+            "x": float(data.get("x", 0)),
+            "y": float(data.get("y", 0)),
+            "meta": data.get("meta") or {}
+        }
+        map_objects.append(obj)
+        save_map()
+
     socketio.emit("map_objects", map_objects)
 
 @socketio.on("update_map_object")
 def update_map_object(data):
     oid = data.get("id")
     meta = data.get("meta") or {}
-    for o in map_objects:
-        if o["id"] == oid:
-            o["meta"] = {**(o.get("meta") or {}), **meta}  # merge
-            break
+
+    with map_lock:
+        changed = False
+        for o in map_objects:
+            if o.get("id") == oid:
+                o["meta"] = {**(o.get("meta") or {}), **meta}  # merge
+                changed = True
+                break
+        if changed:
+            save_map()
+
     socketio.emit("map_objects", map_objects)
+
 
 @socketio.on("delete_map_object")
 def delete_map_object(data):
     oid = data.get("id")
-    global map_objects
-    map_objects = [o for o in map_objects if o["id"] != oid]
-    socketio.emit("map_objects", map_objects)
 
+    with map_lock:
+        before = len(map_objects)
+        # mutate in-place to avoid any weird reference issues
+        map_objects[:] = [o for o in map_objects if o.get("id") != oid]
+        if len(map_objects) != before:
+            save_map()
+
+    socketio.emit("map_objects", map_objects)
 
 @socketio.on("connect")
 def on_connect():
@@ -250,20 +266,21 @@ def spawn_unit(data):
     unit = data.get("unit", {})
 
     new_unit = {
-        "id": str(uuid.uuid4()),
+        # ✅ keep client id if provided
+        "id": unit.get("id") or str(uuid.uuid4()),
         "x": unit.get("x", 0),
         "y": unit.get("y", 0),
-        "tx": unit.get("x", 0),
-        "ty": unit.get("y", 0),
-        "hp": 100,
-        "anim": "idle",
-        "dir": "000",
+        "tx": unit.get("tx", unit.get("x", 0)),
+        "ty": unit.get("ty", unit.get("y", 0)),
+        "hp": unit.get("hp", 100),
+        "anim": unit.get("anim", "idle"),
+        "dir": unit.get("dir", "000"),
         "itemSlots": make_default_slots()
     }
 
     players[sid]["units"].append(new_unit)
-
     socketio.emit("update_units", {"sid": sid, "units": players[sid]["units"]})
+
 
 @socketio.on("drop_item")
 def on_drop_item(data):
@@ -370,74 +387,84 @@ def on_pickup_item(data):
 @socketio.on("attack_unit")
 def handle_attack_unit(data):
     target_sid = data.get("targetSid")
-    target_id = data.get("unitId")
-    damage = data.get("damage", 0)
+    target_id  = data.get("unitId")
 
-    if target_sid not in players:
+    try:
+        damage = float(data.get("damage", 0))
+    except (TypeError, ValueError):
         return
 
-    units = players[target_sid]["units"]
-    target = next((u for u in units if u["id"] == target_id), None)
+    if not target_sid or target_sid not in players:
+        return
+
+    units = players[target_sid].get("units", [])
+    target = next((u for u in units if u.get("id") == target_id), None)
     if not target:
         return
 
-    # Apply damage
-    target["hp"] -= damage
-    if target["hp"] <= 0:
-        target["hp"] = 0
-        target["dead"] = True
-        target["anim"] = "idle"
+    target["hp"] = max(0, float(target.get("hp", 100)) - damage)
 
-    # 🔥 Emit HP update **before removing** dead unit
     socketio.emit("unit_hp_update", {
         "sid": target_sid,
         "unitId": target["id"],
         "hp": target["hp"]
     })
 
-    # Remove dead units from server state
-    players[target_sid]["units"] = [u for u in units if u["hp"] > 0]
+    if target["hp"] <= 0:
+        players[target_sid]["units"] = [u for u in units if u.get("hp", 0) > 0]
+        socketio.emit("update_units", {
+            "sid": target_sid,
+            "units": players[target_sid]["units"]
+        })
+        emit_state()
 
-    # Optional: emit full unit list for clients to resync
-    socketio.emit("update_units", {
-        "sid": target_sid,
-        "units": players[target_sid]["units"]
-    })
 
-
+@socketio.on("request_state")
+def on_request_state():
+    emit_state(to_sid=request.sid)
 
 
 @socketio.on("update_units")
 def on_update_units(data):
     sid = request.sid
-    if sid not in players:
+    incoming = data.get("units", []) or []
+
+    p = players.get(sid)
+    if not p:
         return
 
-    client_units = data.get("units", [])
-    server_units = players[sid].get("units", [])
+    units = p.get("units") or []
+    by_id = {u.get("id"): u for u in units if isinstance(u, dict) and u.get("id")}
 
-    # map server units by id
-    by_id = {u.get("id"): u for u in server_units}
-
-    for cu in client_units:
-        uid = cu.get("id")
-        if not uid or uid not in by_id:
+    for u in incoming:
+        if not isinstance(u, dict):
             continue
 
-        su = by_id[uid]
+        uid = u.get("id")
+        if not uid:
+            continue
 
-        su["x"] = cu.get("x", su["x"])
-        su["y"] = cu.get("y", su["y"])
-        su["tx"] = cu.get("tx", su.get("tx", 0))
-        su["ty"] = cu.get("ty", su.get("ty", 0))
-        su["dir"] = cu.get("dir", su.get("dir", "000"))
+        su = by_id.get(uid)
 
-        if cu.get("anim") and cu["anim"] != su.get("anim"):
-            su["anim"] = cu["anim"]
+        # ✅ IMPORTANT: ignore unknown unit IDs (prevents resurrecting killed units)
+        if su is None:
+            continue
 
-        # keep su["itemSlots"] server-side; do NOT accept client changes to equipment
+        # ✅ update only movement/anim fields (hp stays server-authoritative)
+        su["x"] = float(u.get("x", su.get("x", 0)))
+        su["y"] = float(u.get("y", su.get("y", 0)))
+        su["tx"] = float(u.get("tx", su.get("tx", su["x"])))
+        su["ty"] = float(u.get("ty", su.get("ty", su["y"])))
+        su["anim"] = u.get("anim", su.get("anim", "idle"))
+        su["dir"]  = u.get("dir",  su.get("dir", "000"))
 
-    socketio.emit("update_units", {"sid": sid, "units": server_units})
+    # keep top-level position synced
+    if units:
+        p["x"] = float(units[0].get("x", p.get("x", 0)))
+        p["y"] = float(units[0].get("y", p.get("y", 0)))
+
+    socketio.emit("update_units", {"sid": sid, "units": units})
+
 
 
 
