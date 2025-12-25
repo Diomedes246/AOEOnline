@@ -1,0 +1,532 @@
+// Drawing functions moved from index.html
+
+function drawCircleDebug(x, y, r, color) {
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.stroke();
+}
+
+function drawRectDebug(x, y, w, h, color) {
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x - w / 2, y - h / 2, w, h);
+}
+
+function drawEntityTitle(obj, sx, sy) {
+  if (!obj?.meta?.entity) return;
+
+  const title = (obj.meta.title && obj.meta.title.trim())
+    ? obj.meta.title
+    : getDefaultEntityTitle(obj);
+
+  ctx.fillStyle = "white";
+  ctx.font = "12px monospace";
+  ctx.textAlign = "center";
+  ctx.fillText(title, sx, sy - 40);
+}
+
+function renderYForWorld(obj) {
+  if (obj._type === "building") return obj.y + BUILD_H / 2;
+
+  if (obj._type === "tile") {
+    const defH = TILE_DEFS[obj.kind]?.h ?? 256;
+    const h = obj.meta?.h ?? defH;
+    return obj.y + h / 2;
+  }
+
+  if (obj._type === "tree") return obj.y;
+  if (obj._type === "resource") return obj.y;
+  if (obj._type === "ground") return obj.y;
+  return obj.y;
+}
+
+function renderYForUnit(u) {
+  return u.y + SPRITE_H/4; // feet-ish anchor
+}
+
+function mouseWorld() {
+  return {
+    x: camera.x + mouse.x - canvas.width / 2,
+    y: camera.y + mouse.y - canvas.height / 2
+  };
+}
+
+function drawBackground(){
+  const cx=canvas.width/2;
+  const cy=canvas.height/2;
+  const baseCol=Math.floor(camera.x/HALF_W);
+  const baseRow=Math.floor(camera.y/HALF_H);
+  const range=4;
+
+  for(let r=-range;r<=range;r++){
+    for(let c=-range;c<=range;c++){
+      const col=baseCol+c;
+      const row=baseRow+r;
+      const wx=(col-row)*HALF_W;
+      const wy=(col+row)*HALF_H;
+      ctx.drawImage(tile, cx+wx-camera.x, cy+wy-camera.y);
+    }
+  }
+}
+
+function clamp01(v){ return Math.max(0, Math.min(1, v)); }
+
+function drawHarvestBars() {
+  const now = performance.now();
+
+  for (const u of myUnits) {
+    if (!u.harvesting) continue;
+
+    const r = resources.find(rr => rr.id === u.harvesting.resourceId);
+    if (!r) continue;
+
+    const t = clamp01((now - u.harvesting.startTime) / HARVEST_TIME);
+
+    const sx = canvas.width/2 + r.x - camera.x;
+    const sy = canvas.height/2 + r.y - camera.y;
+
+    const w = 46, h = 6;
+    const x = sx - w/2;
+    const y = sy - 34;
+
+    // background
+    ctx.fillStyle = "rgba(0,0,0,0.6)";
+    ctx.fillRect(x, y, w, h);
+
+    // fill
+    ctx.fillStyle = "rgba(0,255,0,0.85)";
+    ctx.fillRect(x, y, w * t, h);
+
+    // border
+    ctx.strokeStyle = "white";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x, y, w, h);
+  }
+}
+
+function draw() {
+  // Wait until all assets have loaded (overlay will be hidden).
+  if (!window.ASSETS_LOADED) {
+    requestAnimationFrame(draw);
+    return;
+  }
+  update();
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Draw background
+  drawBackground();
+
+const worldRenderables = [];
+
+// Trees
+for (const t of trees) worldRenderables.push({ _type:"tree", x:t.x, y:t.y });
+
+// Resources
+for (const r of resources) worldRenderables.push({ _type:"resource", ...r });
+
+// Ground items
+for (const it of groundItems) worldRenderables.push({ _type:"ground", ...it });
+
+// Editor map objects
+for (const o of mapObjects) {
+  worldRenderables.push({
+    _type: o.type === "building" ? "building" : "tile",
+    ...o
+  });
+}
+
+// RTS buildings array
+for (const b of buildings) worldRenderables.push({ _type:"building", ...b });
+
+// Sort bottom-last
+worldRenderables.sort((a,b) => {
+  const ay = renderYForWorld(a), by = renderYForWorld(b);
+  if (ay !== by) return ay - by;
+  return (a.x - b.x);
+});
+
+// Draw world (NO units here)
+for (const obj of worldRenderables) {
+  const sx = canvas.width/2 + obj.x - camera.x;
+  const sy = canvas.height/2 + obj.y - camera.y;
+
+  if (obj._type === "tree") {
+    ctx.drawImage(treeImg, sx - TREE_W/2, sy - TREE_H, TREE_W, TREE_H);
+    continue;
+  }
+
+  if (obj._type === "resource") {
+    ctx.drawImage(resourceImg, sx - RES_W/2, sy - RES_H/2, RES_W, RES_H);
+    continue;
+  }
+
+  if (obj._type === "ground") {
+    const icon = itemIcons[obj.name];
+    if (icon && icon.complete && icon.naturalWidth > 0) {
+      ctx.drawImage(icon, sx - GROUND_ITEM_SIZE/2, sy - GROUND_ITEM_SIZE/2, GROUND_ITEM_SIZE, GROUND_ITEM_SIZE);
+    }
+    continue;
+  }
+
+if (obj._type === "tile") {
+  const def = TILE_DEFS[obj.kind];
+  const img = tileImages[obj.kind];
+  if (!def) continue;
+
+const w = obj.meta?.w ?? def.w;
+const h = obj.meta?.h ?? def.h;
+
+
+  if (img && img.complete && img.naturalWidth > 0) {
+    ctx.drawImage(img, sx - w / 2, sy - h / 2, w, h);
+  }
+
+  // ✅ debug draw tile collision (rect centered on tile x,y)
+  if (DEBUG_COLLISIONS && obj.meta?.collides) {
+    ctx.strokeStyle = "rgba(0,255,255,0.4)";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 4]);
+    ctx.strokeRect(
+      sx - (obj.meta.cw ?? 0) / 2,
+      sy - (obj.meta.ch ?? 0) / 2,
+      (obj.meta.cw ?? 0),
+      (obj.meta.ch ?? 0)
+    );
+    ctx.setLineDash([]);
+  }
+  drawEntityTitle(obj, sx, sy);
+  continue;
+}
+
+
+  if (obj._type === "building") {
+    ctx.drawImage(buildingImg, sx - BUILD_W/2, sy - BUILD_H/2, BUILD_W, BUILD_H);
+
+    if (obj.selected) {
+      ctx.strokeStyle = "cyan";
+      ctx.lineWidth = 2;
+      ctx.setLineDash([5, 5]);
+      ctx.strokeRect(sx - BUILD_W/2, sy - BUILD_H/2, BUILD_W, BUILD_H);
+      ctx.setLineDash([]);
+    }
+    continue;
+  }
+}
+
+// ===== Editor placement preview (ghost) =====
+if (editorMode) {
+  const bs = document.getElementById("brushSelect");
+  if (bs && bs.value) {
+    const { x: wx, y: wy } = mouseWorld();
+    const sx = canvas.width / 2 + wx - camera.x;
+    const sy = canvas.height / 2 + wy - camera.y;
+
+    const [type, kind] = bs.value.split(":");
+
+    ctx.save();
+    ctx.globalAlpha = 0.55;
+
+    if (type === "building" && kind === "building") {
+      // building ghost
+      if (buildingImg && buildingImg.complete && buildingImg.naturalWidth > 0) {
+        ctx.drawImage(buildingImg, sx - BUILD_W / 2, sy - BUILD_H / 2, BUILD_W, BUILD_H);
+      } else {
+        ctx.strokeStyle = "white";
+        ctx.strokeRect(sx - BUILD_W / 2, sy - BUILD_H / 2, BUILD_W, BUILD_H);
+      }
+    } else if (type === "tile") {
+      const def = TILE_DEFS[kind];
+      const img = tileImages[kind];
+
+    const w = editorTileW;
+    const h = editorTileH;
+
+      if (img && img.complete && img.naturalWidth > 0) {
+        ctx.drawImage(img, sx - w / 2, sy - h / 2, w, h);
+      } else {
+        // fallback ghost box
+        ctx.strokeStyle = "white";
+        ctx.strokeRect(sx - w / 2, sy - h / 2, w, h);
+        ctx.fillStyle = "white";
+        ctx.font = "10px monospace";
+        ctx.textAlign = "center";
+        ctx.fillText(kind || "tile", sx, sy);
+      }
+    }
+
+    // extra outline so it’s readable
+    ctx.globalAlpha = 1;
+    ctx.setLineDash([4, 4]);
+    ctx.lineWidth = 2;
+
+    if (type === "building") {
+      ctx.strokeStyle = "cyan";
+      ctx.strokeRect(sx - BUILD_W / 2, sy - BUILD_H / 2, BUILD_W, BUILD_H);
+    } else if (type === "tile") {
+    const w = editorTileW;
+    const h = editorTileH;
+      ctx.strokeStyle = "lime";
+      ctx.strokeRect(sx - w / 2, sy - h / 2, w, h);
+    }
+
+    // draw collision preview
+if (type === "tile" && editorCollisionEnabled) {
+  ctx.save();
+  ctx.strokeStyle = "rgba(0,255,255,0.9)";
+  ctx.setLineDash([6, 4]);
+  ctx.lineWidth = 2;
+  ctx.strokeRect(
+    sx - editorCollisionW / 2,
+    sy - editorCollisionH / 2,
+    editorCollisionW,
+    editorCollisionH
+  );
+  ctx.restore();
+}
+
+
+if (type === "tile" && !editorCollisionEnabled) {
+  ctx.fillStyle = "rgba(255,0,0,0.6)";
+  ctx.font = "12px monospace";
+  ctx.textAlign = "center";
+  ctx.fillText("NO COLLISION", sx, sy - 40);
+}
+
+
+    ctx.restore();
+  }
+}
+
+
+
+const unitRenderables = [];
+
+// my units (reference)
+for (const u of myUnits) unitRenderables.push({ owner: mySid, ref: u });
+
+// other players units (reference)
+for (const sid in players) {
+  if (sid === mySid) continue;
+  for (const u of (players[sid].units || [])) {
+    unitRenderables.push({ owner: sid, ref: u });
+  }
+}
+
+unitRenderables.sort((a,b) => renderYForUnit(a.ref) - renderYForUnit(b.ref));
+
+for (const item of unitRenderables) {
+  const u = item.ref;
+  const isMine = (item.owner === mySid);
+
+  const sx = canvas.width/2 + u.x - camera.x;
+  const sy = canvas.height/2 + u.y - camera.y;
+
+  let frames, framesShadow, frameIndex;
+
+  if (!isMine) {
+    if (u.anim === "attack") {
+      frames = playerSprites.attack[u.dir];
+      framesShadow = playerSprites.attackshadow[u.dir];
+      u.renderAttackFrame = (u.renderAttackFrame ?? 0) + ANIM_SPEED;
+      if (u.renderAttackFrame >= ATTACK_ANIM_FRAMES) u.renderAttackFrame = 0;
+      frameIndex = Math.floor(u.renderAttackFrame);
+    } else if (u.anim === "walk") {
+      frames = playerSprites.walk[u.dir];
+      framesShadow = playerSprites.walkshadow[u.dir];
+      u.renderFrame = (u.renderFrame ?? 0) + ANIM_SPEED;
+      if (u.renderFrame >= WALK_FRAMES) u.renderFrame = 0;
+      frameIndex = Math.floor(u.renderFrame);
+    } else {
+      frames = playerSprites.idle[u.dir];
+      framesShadow = playerSprites.idleshadow[u.dir];
+      u.renderFrame = (u.renderFrame ?? 0) + ANIM_SPEED;
+      if (u.renderFrame >= IDLE_FRAMES) u.renderFrame = 0;
+      frameIndex = Math.floor(u.renderFrame);
+    }
+  } else {
+    if (u.anim === "attack") {
+      frames = playerSprites.attack[u.dir];
+      framesShadow = playerSprites.attackshadow[u.dir];
+      frameIndex = Math.floor(u.attackFrame || 0);
+    } else if (u.anim === "walk") {
+      frames = playerSprites.walk[u.dir];
+      framesShadow = playerSprites.walkshadow[u.dir];
+      frameIndex = Math.floor(u.frame || 0);
+    } else {
+      frames = playerSprites.idle[u.dir];
+      framesShadow = playerSprites.idleshadow[u.dir];
+      frameIndex = Math.floor(u.frame || 0);
+    }
+  }
+
+  const img = frames?.[frameIndex];
+  const sh  = framesShadow?.[frameIndex];
+
+  if (sh && sh.complete) ctx.drawImage(sh, sx - SPRITE_W/2, sy - SPRITE_H/2, SPRITE_W, SPRITE_H);
+  if (img && img.complete) ctx.drawImage(img, sx - SPRITE_W/2, sy - SPRITE_H/2, SPRITE_W, SPRITE_H);
+
+  // HP bar
+  ctx.fillStyle = "red";
+  ctx.fillRect(sx - 20, sy - 30, 40, 5);
+  ctx.fillStyle = "green";
+  ctx.fillRect(sx - 20, sy - 30, 40 * ((u.hp ?? 100) / 100), 5);
+
+  // selection ring
+  if (isMine && u.selected) {
+    ctx.strokeStyle = "yellow";
+    ctx.beginPath();
+    ctx.arc(sx, sy + SPRITE_H/4, 18, 0, Math.PI*2);
+    ctx.stroke();
+  }
+}
+
+
+
+
+
+
+
+  // Hover outlines
+  if (hoveredResource) {
+    const x = canvas.width / 2 + hoveredResource.x - camera.x;
+    const y = canvas.height / 2 + hoveredResource.y - camera.y;
+
+    ctx.strokeStyle = "yellow";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(x, y, RESOURCE_RADIUS, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  if (hoveredPlayerSid && players[hoveredPlayerSid]) {
+    const p = players[hoveredPlayerSid];
+    const x = canvas.width / 2 + p.x - camera.x;
+    const y = canvas.height / 2 + p.y - camera.y;
+
+    ctx.strokeStyle = "red";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.rect(x - 14, y - 14, 28, 28);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+
+  drawHarvestBars();
+
+
+
+
+  // Building placement preview
+  if (buildMode) {
+    ctx.globalAlpha = 0.5;
+    const wx = camera.x + mouse.x - canvas.width / 2;
+    const wy = camera.y + mouse.y - canvas.height / 2;
+    const bx = canvas.width / 2 + wx - camera.x;
+    const by = canvas.height / 2 + wy - camera.y;
+    ctx.drawImage(buildingImg, bx - BUILD_W / 2, by - BUILD_H / 2, BUILD_W, BUILD_H);
+    ctx.globalAlpha = 1;
+  }
+
+  // Selection box
+  if (selecting) {
+    ctx.strokeStyle = "white";
+    ctx.setLineDash([5, 5]);
+    ctx.strokeRect(selectStart.x, selectStart.y, mouse.x - selectStart.x, mouse.y - selectStart.y);
+    ctx.setLineDash([]);
+  }
+
+  // Panels logic
+  const selectedBuilding = buildings.find(b => b.selected);
+  const selectedUnits = myUnits.filter(u => u.selected);
+
+  if (selectedBuilding) {
+    buildingPanel.style.display = "block";
+    panel.style.display = "none";
+  } else if (selectedUnits.length > 0) {
+    panel.style.display = "block";
+    buildingPanel.style.display = "none";
+  } else {
+    panel.style.display = "none";
+    buildingPanel.style.display = "none";
+  }
+
+
+
+// pick a "current unit" for pickup distance checks: first selected local unit
+const picker = myUnits.find(u => u.selected) || null;
+
+const visibleItems = groundItems.slice().sort((a,b)=>a.y-b.y);
+for (const it of visibleItems) {
+  const sx = canvas.width/2 + it.x - camera.x;
+  const sy = canvas.height/2 + it.y - camera.y;
+
+  // icon / fallback
+  const icon = itemIcons[it.name];
+  if (icon && icon.complete && icon.naturalWidth > 0) {
+    ctx.drawImage(icon, sx - GROUND_ITEM_SIZE/2, sy - GROUND_ITEM_SIZE/2, GROUND_ITEM_SIZE, GROUND_ITEM_SIZE);
+  } else {
+    ctx.fillStyle = "rgba(255,255,255,0.15)";
+    ctx.beginPath();
+    ctx.arc(sx, sy, 14, 0, Math.PI*2);
+    ctx.fill();
+    ctx.strokeStyle = "white";
+    ctx.stroke();
+  }
+
+  // name above item (always)
+  ctx.fillStyle = "white";
+  ctx.font = "12px monospace";
+  ctx.textAlign = "center";
+  ctx.fillText(it.name, sx, sy - 22);
+
+  // show pickup range indicator if a selected unit is near enough
+  if (picker && unitCanPickup(picker, it)) {
+    ctx.strokeStyle = "lime";
+    ctx.beginPath();
+    ctx.arc(sx, sy, 18, 0, Math.PI*2);
+    ctx.stroke();
+  }
+}
+
+  if (draggingPickup) {
+    const gi = groundItems.find(x => x.id === draggingPickup.groundItemId);
+    if (gi) {
+      const icon = itemIcons[gi.name];
+      const mx = dragMouse.x;
+      const my = dragMouse.y;
+
+      ctx.globalAlpha = 0.85;
+      if (icon && icon.complete && icon.naturalWidth > 0) {
+        ctx.drawImage(icon, mx - 16, my - 16, 32, 32);
+      } else {
+        ctx.fillStyle = "rgba(255,255,255,0.2)";
+        ctx.beginPath();
+        ctx.arc(mx, my, 14, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = "white";
+        ctx.stroke();
+        ctx.fillStyle = "white";
+        ctx.font = "10px monospace";
+        ctx.textAlign = "center";
+        ctx.fillText(gi.name, mx, my - 18);
+      }
+      ctx.globalAlpha = 1;
+    }
+  }
+
+
+
+
+  // HUD update (safe use of selectedUnits)
+hud.innerText = `Camera: ${camera.x|0}, ${camera.y|0}
+Resources: ${resourceCount}
+Selected: ${selectedUnits.length}
+TileSize: ${editorTileW}x${editorTileH}  Collision: ${editorCollisionEnabled ? `${editorCollisionW}x${editorCollisionH}` : "OFF"}`;
+
+
+  requestAnimationFrame(draw);
+}

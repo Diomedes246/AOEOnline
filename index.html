@@ -1,2605 +1,1198 @@
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>Isometric Multiplayer RTS</title>
-<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
-<style>
-html, body { margin:0; padding:0; overflow:hidden; background:black; }
-canvas { display:block; }
-#hud {
-  position:fixed;
-  top:10px; left:10px;
-  color:white;
-  font-family:monospace;
-  background:rgba(0,0,0,0.5);
-  padding:6px;
-}
-#panel {
-  position:fixed;
-  bottom:20px;
-  left:20px;
-  width:220px;
-  height:120px;
-  background:rgba(30,30,30,0.85);
-  border:2px solid #888;
-  padding:10px;
-  color:white;
-  font-family:monospace;
-  display:none;
-}
-
-#buildBtn {
-  width:100%;
-  height:40px;
-  margin-top:10px;
-  background:#444;
-  color:white;
-  border:1px solid #aaa;
-  cursor:pointer;
-}
-#buildBtn:hover { background:#666; }
-#buildBtn:disabled { background:#222; color:#777; cursor:not-allowed; }
-</style>
-</head>
-
-<body>
-<canvas id="game"></canvas>
-<div id="hud"></div>
-
-<div id="panel">
-  <div>Unit Selected</div>
-  <button id="buildBtn">Place Building</button>
-</div>
-
-<div id="buildingPanel" style="display:none; position:fixed; bottom:20px; left:20px; width:220px; height:120px; background:rgba(30,30,30,0.85); border:2px solid #888; padding:10px; color:white; font-family:monospace;">
-  <div>Building Selected</div>
-  <button id="createUnitBtn">Create Unit</button>
-</div>
-
-<div id="unit-panel" style="position:fixed; right:10px; top:10px; width:200px; background:rgba(0,0,0,0.7); color:white; padding:10px; border-radius:8px;">
-    <h3>Selected Units</h3>
-    <div id="unit-list"></div>
-    <div id="unit-items" style="margin-top:10px;">
-        <h4>Unit Items</h4>
-        <ul id="items-list"></ul>
-    </div>
-</div>
-
-<div id="editorPanel" style="
-  position:fixed;
-  right:10px;
-  bottom:10px;
-  width:240px;
-  background:rgba(0,0,0,0.75);
-  color:white;
-  padding:10px;
-  border-radius:8px;
-  font-family:monospace;
-  z-index:1000;
-">
-  <button id="editorBtn" style="width:100%; height:36px;">Editor: OFF</button>
- <div style="margin-top:10px;">
-  <div>Brush:</div>
-  <select id="brushSelect" style="width:100%; height:30px;">
-    <option value="" disabled selected>Loading tiles…</option>
-  </select>
-  <div style="margin-top:10px; font-size:12px; opacity:0.9;">
-    Left click: place<br/>
-    Shift+Left click: delete<br/>
-    c: toggle collision<br/>
-    Scroll: collision size<br/>
-    Shift+Scroll: tile size 
-  </div>
-  <button id="entityBtn" style="width:100%; height:36px; margin-top:8px;">
-  Entity: OFF
-</button>
-</div>
-</div>
-<div id="entityPanel" style="
-  display:none;
-  position:fixed;
-  left:20px;
-  bottom:160px;
-  width:320px;
-  background:rgba(0,0,0,0.85);
-  color:white;
-  padding:12px;
-  border-radius:10px;
-  border:2px solid #777;
-  font-family:monospace;
-  z-index:2000;
-">
-  <div style="display:flex; justify-content:space-between; align-items:center;">
-    <div style="font-weight:bold;">Entity Inspector</div>
-    <button id="entityCloseBtn" style="height:26px;">X</button>
-  </div>
-
-  <div style="margin-top:10px; font-size:12px; opacity:0.8;" id="entityIdLine"></div>
-
-  <div style="margin-top:10px;">
-    <div style="font-size:12px; opacity:0.8;">Title</div>
-    <input id="entityTitleInput" style="width:100%; height:30px;"/>
-  </div>
-
-  <div style="margin-top:10px;">
-    <div style="font-size:12px; opacity:0.8;">Biography</div>
-    <textarea id="entityBioInput" style="width:100%; height:90px;"></textarea>
-  </div>
-
-  <div style="margin-top:10px;">
-    <div style="display:flex; gap:8px; align-items:center;">
-      <div style="font-size:12px; opacity:0.8; flex:1;">Actions</div>
-      <button id="entityAddActionBtn" style="height:26px;">+ Add</button>
-    </div>
-    <div id="entityActionsList" style="margin-top:8px; display:flex; flex-wrap:wrap; gap:6px;"></div>
-  </div>
-
-  <div style="margin-top:10px; display:flex; gap:8px;">
-    <button id="entitySaveBtn" style="flex:1; height:34px;">Save</button>
-    <button id="entityDeleteBtn" style="flex:1; height:34px;">Delete</button>
-  </div>
-</div>
-
-
-
-
-<script>
-/* ================= SETUP ================= */
-const canvas = document.getElementById("game");
-const ctx = canvas.getContext("2d");
-const hud = document.getElementById("hud");
-const panel = document.getElementById("panel");
-const buildBtn = document.getElementById("buildBtn");
-const socket = io({autoConnect: false});
-
-let mySid = null;
-socket.on("connect", () => {
-  mySid = socket.id;
-
-  // ✅ request initial map after connection is established
-  socket.emit("request_state");
-  socket.emit("request_map");
-});
-
-
-function resize(){
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
-}
-window.addEventListener("resize", resize);
-resize();
-
-let DEBUG_COLLISIONS = true; // toggle on/off
-
-function drawCircleDebug(x, y, r, color) {
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.arc(x, y, r, 0, Math.PI * 2);
-  ctx.stroke();
-}
-
-function drawRectDebug(x, y, w, h, color) {
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 1;
-  ctx.strokeRect(x - w / 2, y - h / 2, w, h);
-}
-
-
-/* ================= CAMERA ================= */
-let camera = {x:0,y:0};
-const camSpeed = 12;
-const keys = {};
-document.addEventListener("keydown", (e) => {
-  keys[e.key] = true;
-
-  // Toggle collision on/off while in editor
-  if (!e.repeat && editorMode && (e.key === "c" || e.key === "C")) {
-    editorCollisionEnabled = !editorCollisionEnabled;
+  <!DOCTYPE html>
+  <html>
+  <head>
+  <meta charset="utf-8">
+  <title>Isometric Multiplayer RTS</title>
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <style>
+  html, body { margin:0; padding:0; overflow:hidden; background:black; }
+  canvas { display:block; }
+  #hud {
+    position:fixed;
+    top:10px; left:10px;
+    color:white;
+    font-family:monospace;
+    background:rgba(0,0,0,0.5);
+    padding:6px;
   }
-});
-
-document.addEventListener("keyup", (e) => {
-  keys[e.key] = false;
-});
-
-
-function setEntityInspectorEditable(canEdit) {
-  entityTitleInput.disabled = !canEdit;
-  entityBioInput.disabled = !canEdit;
-
-  entityAddActionBtn.disabled = !canEdit;
-  entitySaveBtn.disabled = !canEdit;
-  entityDeleteBtn.disabled = !canEdit;
-
-  // Optional visual cue
-  entityTitleInput.style.opacity = canEdit ? "1" : "0.7";
-  entityBioInput.style.opacity   = canEdit ? "1" : "0.7";
-}
-
-
-/* ================= PLAYER SPRITES ================= */
-
-const SPRITE_W = 256;
-const SPRITE_H = 256;
-const DIRECTIONS = [0, 22, 45, 67, 90, 112, 135, 157, 180, 202, 225, 247, 270, 292, 315, 337];
-const IDLE_FRAMES = 24;
-const WALK_FRAMES = 24;
-const ANIM_SPEED = 0.3;
-
-
-const UNIT_RADIUS = 18;
-const PLAYER_RADIUS = 20;
-const TREE_RADIUS = 140;
-const RESOURCE_RADIUS_COLLIDE = 15;
-
-// Buildings use rectangle collision
-const BUILD_COLLISION_PADDING = -50;
-
-
-const UNIT_ATTACK_RANGE = PLAYER_RADIUS + UNIT_RADIUS + 10; // 10 extra for buffer
-const UNIT_ATTACK_DPS = 30; // damage per second
-const ATTACK_COOLDOWN = 1000 / 60; // 1 tick per frame (60fps)
-const UNIT_MAX_HEALTH = 100;
-const ATTACK_ANIM_FRAMES = 24;
-
-
-let groundItems = []; // {id, name, x, y}
-
-const itemIcons = {
-  sword: new Image(),
-  shield: new Image()
-};
-itemIcons.sword.src = "static/items/sword.png";   // make these files
-itemIcons.shield.src = "static/items/shield.png"; // or draw text fallback
-const GROUND_ITEM_SIZE = 32;
-const PICKUP_RADIUS = 26;
-
-const PICKUP_DISTANCE = 120; // how close unit must be to pick up from ground
-let currentItemsUnitId = null; // which unit's equipment UI is currently showing
-
-
-function unitCanPickup(unit, groundItem) {
-  return Math.hypot(unit.x - groundItem.x, unit.y - groundItem.y) <= PICKUP_DISTANCE;
-}
-
-let hoveredGroundItem = null;
-
-let draggingPickup = null; // { groundItemId, unitId }
-let dragMouse = { x: 0, y: 0 };
-
-function findSlotElementAtScreen(x, y) {
-  const el = document.elementFromPoint(x, y);
-  if (!el) return null;
-  return el.closest && el.closest("#items-list li");
-}
-
-function getFirstSelectedUnit() {
-  return myUnits.find(u => u.selected) || null;
-}
-function onGlobalDragMove(e) {
-  // keep mouse updated even over UI
-  dragMouse.x = e.clientX;
-  dragMouse.y = e.clientY;
-
-  // optional: block text selection while dragging
-  e.preventDefault();
-}
-
-function onGlobalDragEnd(e) {
-  // stop capturing
-  window.removeEventListener("mousemove", onGlobalDragMove, true);
-  window.removeEventListener("mouseup", onGlobalDragEnd, true);
-
-  if (!draggingPickup) return;
-
-  const gi = groundItems.find(x => x.id === draggingPickup.groundItemId);
-  const picker = myUnits.find(u => u.id === draggingPickup.unitId);
-  draggingPickup = null;
-
-  if (!gi || !picker) return;
-
-  // must still be in range
-  if (!unitCanPickup(picker, gi)) return;
-
-  // must drop on a slot
-  const slotEl = findSlotElementAtScreen(e.clientX, e.clientY);
-  if (!slotEl) return;
-
-  const slotIndex = parseInt(slotEl.dataset.slotIndex, 10);
-  const unitId = slotEl.dataset.unitId;
-
-  const targetUnit = myUnits.find(u => u.id === unitId);
-  if (!targetUnit) return;
-
-  if (!targetUnit.itemSlots) targetUnit.itemSlots = [null, null];
-  if (targetUnit.itemSlots[slotIndex]) return; // must be empty
-
-  socket.emit("pickup_item", {
-    unitId: targetUnit.id,
-    slotIndex,
-    groundItemId: gi.id
-  });
-}
-
-
-function renderUnitItems(unit) {
-  currentItemsUnitId = unit.id;
-
-  const itemsList = document.getElementById("items-list");
-  itemsList.innerHTML = "";
-
-  if (!unit.itemSlots) unit.itemSlots = [null, null];
-
-  for (let i = 0; i < 2; i++) {
-    const slot = unit.itemSlots[i];
-
-    const li = document.createElement("li");
-    li.style.display = "flex";
-    li.style.alignItems = "center";
-    li.style.justifyContent = "space-between";
-    li.style.border = "1px solid #777";
-    li.style.borderRadius = "6px";
-    li.style.padding = "6px";
-    li.style.marginBottom = "6px";
-    li.style.background = "rgba(255,255,255,0.05)";
-
-    li.dataset.slotIndex = String(i);
-    li.dataset.unitId = unit.id;
-
-    const left = document.createElement("div");
-    left.textContent = `Slot ${i + 1}: ${slot ? slot.name : "(empty)"}`;
-    li.appendChild(left);
-
-    // Allow dropping from ground -> slot OR slot -> slot
-    li.addEventListener("dragover", (e) => {
-      e.preventDefault();
-      li.style.outline = "2px dashed #fff";
-    });
-    li.addEventListener("dragleave", () => {
-      li.style.outline = "";
-    });
-
-    li.addEventListener("drop", (e) => {
-      e.preventDefault();
-      li.style.outline = "";
-
-      const payloadStr = e.dataTransfer.getData("application/json");
-      if (!payloadStr) return;
-
-      let payload;
-      try { payload = JSON.parse(payloadStr); } catch { return; }
-
-      const targetUnit = myUnits.find(u => u.id === unit.id);
-      if (!targetUnit) return;
-      if (!targetUnit.itemSlots) targetUnit.itemSlots = [null, null];
-
-      const slotIndex = i;
-
-  if (payload.type === "ground_item") {
-    socket.emit("pickup_item", {
-      unitId: unit.id,
-      slotIndex: i,
-      groundItemId: payload.groundItemId
-    });
-    return;
+  #panel {
+    position:fixed;
+    bottom:20px;
+    left:20px;
+    width:220px;
+    height:120px;
+    background:rgba(30,30,30,0.85);
+    border:2px solid #888;
+    padding:10px;
+    color:white;
+    font-family:monospace;
+    display:none;
   }
 
-      // If dropping a unit item (slot -> slot) (optional nice feature):
-      if (payload.type === "unit_item") {
-        const fromUnit = myUnits.find(u => u.id === payload.unitId);
-        if (!fromUnit || !fromUnit.itemSlots) return;
+  #buildBtn {
+    width:100%;
+    height:40px;
+    margin-top:10px;
+    background:#444;
+    color:white;
+    border:1px solid #aaa;
+    cursor:pointer;
+  }
+  #buildBtn:hover { background:#666; }
+  #buildBtn:disabled { background:#222; color:#777; cursor:not-allowed; }
+  </style>
+  </head>
 
-        const fromSlot = payload.slotIndex;
-        const moving = fromUnit.itemSlots[fromSlot];
-        if (!moving) return;
+  <body>
+  <canvas id="game"></canvas>
+  <div id="hud"></div>
 
-        // If target slot occupied, swap
-        const temp = targetUnit.itemSlots[slotIndex];
-        targetUnit.itemSlots[slotIndex] = moving;
-        fromUnit.itemSlots[fromSlot] = temp || null;
+  <div id="panel">
+    <div>Unit Selected</div>
+    <button id="buildBtn">Place Building</button>
+  </div>
 
-        renderUnitItems(targetUnit);
-        return;
+  <div id="buildingPanel" style="display:none; position:fixed; bottom:20px; left:20px; width:220px; height:120px; background:rgba(30,30,30,0.85); border:2px solid #888; padding:10px; color:white; font-family:monospace;">
+    <div>Building Selected</div>
+    <button id="createUnitBtn">Create Unit</button>
+  </div>
+
+  <div id="unit-panel" style="position:fixed; right:10px; top:10px; width:200px; background:rgba(0,0,0,0.7); color:white; padding:10px; border-radius:8px;">
+      <h3>Selected Units</h3>
+      <div id="unit-list"></div>
+      <div id="unit-items" style="margin-top:10px;">
+          <h4>Unit Items</h4>
+          <ul id="items-list"></ul>
+      </div>
+  </div>
+
+  <div id="editorPanel" style="
+    position:fixed;
+    right:10px;
+    bottom:10px;
+    width:240px;
+    background:rgba(0,0,0,0.75);
+    color:white;
+    padding:10px;
+    border-radius:8px;
+    font-family:monospace;
+    z-index:1000;
+  ">
+    <button id="editorBtn" style="width:100%; height:36px;">Editor: OFF</button>
+  <div style="margin-top:10px;">
+    <div>Brush:</div>
+    <select id="brushSelect" style="width:100%; height:30px;">
+      <option value="" disabled selected>Loading tiles…</option>
+    </select>
+    <div style="margin-top:10px; font-size:12px; opacity:0.9;">
+      Left click: place<br/>
+      Shift+Left click: delete<br/>
+      c: toggle collision<br/>
+      Scroll: collision size<br/>
+      Shift+Scroll: tile size 
+    </div>
+    <button id="entityBtn" style="width:100%; height:36px; margin-top:8px;">
+    Entity: OFF
+  </button>
+  </div>
+  </div>
+  <div id="entityPanel" style="
+    display:none;
+    position:fixed;
+    left:20px;
+    bottom:160px;
+    width:320px;
+    background:rgba(0,0,0,0.85);
+    color:white;
+    padding:12px;
+    border-radius:10px;
+    border:2px solid #777;
+    font-family:monospace;
+    z-index:2000;
+  ">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <div style="font-weight:bold;">Entity Inspector</div>
+      <button id="entityCloseBtn" style="height:26px;">X</button>
+    </div>
+
+    <div style="margin-top:10px; font-size:12px; opacity:0.8;" id="entityIdLine"></div>
+
+    <div style="margin-top:10px;">
+      <div style="font-size:12px; opacity:0.8;">Title</div>
+      <input id="entityTitleInput" style="width:100%; height:30px;"/>
+    </div>
+
+    <div style="margin-top:10px;">
+      <div style="font-size:12px; opacity:0.8;">Biography</div>
+      <textarea id="entityBioInput" style="width:100%; height:90px;"></textarea>
+    </div>
+
+    <div style="margin-top:10px;">
+      <div style="display:flex; gap:8px; align-items:center;">
+        <div style="font-size:12px; opacity:0.8; flex:1;">Actions</div>
+        <button id="entityAddActionBtn" style="height:26px;">+ Add</button>
+      </div>
+      <div id="entityActionsList" style="margin-top:8px; display:flex; flex-wrap:wrap; gap:6px;"></div>
+    </div>
+
+    <div style="margin-top:10px;">
+      <div style="font-size:12px; opacity:0.8;">Items</div>
+      <ul id="entity-items-list" style="margin-top:6px; list-style:none; padding:0;"></ul>
+    </div>
+
+    <div style="margin-top:10px;">
+      <div style="font-size:12px; opacity:0.8;">Abilities</div>
+      <div id="entity-abilities-list" style="margin-top:6px; display:flex; gap:6px; flex-wrap:wrap;"></div>
+    </div>
+
+    <div style="margin-top:10px; display:flex; gap:8px;">
+      <button id="entitySaveBtn" style="flex:1; height:34px;">Save</button>
+      <button id="entityDeleteBtn" style="flex:1; height:34px;">Delete</button>
+    </div>
+  </div>
+
+
+
+
+  <script>
+  const canvas = document.getElementById("game");
+  // Loading overlay + image loader instrumentation
+  (function(){
+    const overlay = document.createElement('div');
+    overlay.id = 'loadingOverlay';
+    overlay.style.position = 'fixed';
+    overlay.style.left = '0';
+    overlay.style.top = '0';
+    overlay.style.right = '0';
+    overlay.style.bottom = '0';
+    overlay.style.background = '#000';
+    overlay.style.display = 'flex';
+    overlay.style.alignItems = 'center';
+    overlay.style.justifyContent = 'center';
+    overlay.style.zIndex = '99999';
+    overlay.style.flexDirection = 'column';
+    overlay.style.color = 'white';
+    overlay.innerHTML = `
+      <div style="font-family:monospace; font-size:18px; margin-bottom:12px;">Loading assets...</div>
+      <div style="width:60%; max-width:520px; background:rgba(255,255,255,0.08); padding:6px; border-radius:6px;">
+        <div id="loadingBarInner" style="height:18px; width:0%; background:linear-gradient(90deg,#4ee,#08f); border-radius:4px;"></div>
+      </div>
+      <div id="loadingPercent" style="font-family:monospace; margin-top:8px; opacity:0.9;">0%</div>
+    `;
+    document.body.appendChild(overlay);
+
+    window.__loader = {
+      total: 0,
+      loaded: 0,
+      errored: 0,
+      _lastChange: Date.now(),
+      _checkTimer: null,
+      update() {
+        const inner = document.getElementById('loadingBarInner');
+        const pctEl = document.getElementById('loadingPercent');
+        const total = Math.max(1, this.total);
+        const done = Math.min(this.loaded + this.errored, total);
+        const pct = Math.floor((done / total) * 100);
+        if (inner) inner.style.width = pct + '%';
+        if (pctEl) pctEl.textContent = pct + '%';
+
+        // If everything loaded right now, wait a short quiescence period
+        // to allow any late Image() constructions to register.
+        if (done >= this.total) {
+          const now = Date.now();
+          const sinceChange = now - (this._lastChange || 0);
+          const QUIESCE = 400; // ms
+          clearTimeout(this._checkTimer);
+          if (sinceChange >= QUIESCE) {
+            window.ASSETS_LOADED = true;
+            setTimeout(() => { overlay.style.display = 'none'; }, 120);
+          } else {
+            // schedule a recheck after the remaining quiesce interval
+            this._checkTimer = setTimeout(() => this.update(), QUIESCE - sinceChange + 10);
+          }
+        }
       }
+    };
+
+    // Monkeypatch Image to auto-register loads
+    const NativeImage = window.Image;
+    function LoaderImage() {
+      const img = new NativeImage();
+      try { window.__loader.total++; window.__loader._lastChange = Date.now(); } catch(e){}
+      img.addEventListener('load', function(){ try{ window.__loader.loaded++; window.__loader.update(); }catch(e){} });
+      img.addEventListener('error', function(){ try{ window.__loader.errored++; window.__loader.update(); }catch(e){} });
+      return img;
+    }
+    LoaderImage.prototype = NativeImage.prototype;
+    window.Image = LoaderImage;
+    // start as not loaded
+    window.ASSETS_LOADED = false;
+  })();
+  let editorMode = false;
+  let editorTileW = 256;
+  let editorTileH = 256;
+  let editorTileAspect = 1;
+  let editorTileOverride = false;
+  let editorCollisionEnabled = true;
+  let editorCollisionW = 64;
+  let editorCollisionH = 64;
+
+  // Global variables
+  let camera = {x:0,y:0};
+  let groundItems = [];
+  let trees = [];
+  let resources = [];
+  let buildings = [];
+  let myUnits = [];
+  let players = {};
+  let resourceCount = 0;
+  let hoveredResource = null;
+  let hoveredPlayerSid = null;
+  let dragMouse = {x:0,y:0};
+  let selecting = false;
+  let selectStart = {x:0,y:0};
+  let mouse = {x:0,y:0};
+  let buildMode = false;
+  let localBuildingPlaced = false;
+  const socket = io({autoConnect: false});
+  socket.on("server_debug", (data) => { try { console.log("SERVER_DEBUG:", data.msg); } catch(e){} });
+  // Building image and default size (needed by static/draw.js)
+  const BUILD_W = 256;
+  const BUILD_H = 256;
+  const buildingImg = new Image();
+  buildingImg.src = "static/tiles/building.png";
+  </script>
+
+  <script src="static/input.js"></script>
+  <script src="static/update.js"></script>
+  <script src="static/draw.js"></script>
+  <script src="static/editor.js"></script>
+
+  <script>
+  /* ================= SETUP ================= */
+  const ctx = canvas.getContext("2d");
+  const hud = document.getElementById("hud");
+  const panel = document.getElementById("panel");
+  const buildBtn = document.getElementById("buildBtn");
+
+  // Entity inspector elements (used by openEntityInspector / input handlers)
+  const entityPanelEl = document.getElementById("entityPanel");
+  const entityIdLine = document.getElementById("entityIdLine");
+  const entityTitleInput = document.getElementById("entityTitleInput");
+  const entityBioInput = document.getElementById("entityBioInput");
+  const entityAddActionBtn = document.getElementById("entityAddActionBtn");
+  const entityActionsList = document.getElementById("entityActionsList");
+  const entitySaveBtn = document.getElementById("entitySaveBtn");
+  const entityDeleteBtn = document.getElementById("entityDeleteBtn");
+  const entityCloseBtn = document.getElementById("entityCloseBtn");
+
+  let selectedEntityId = null;
+  let draggingPickup = null;
+
+  if (entityCloseBtn) {
+    entityCloseBtn.onclick = () => {
+      if (entityPanelEl) entityPanelEl.style.display = "none";
+      selectedEntityId = null;
+    };
+  }
+
+  let mySid = null;
+  socket.on("connect", () => {
+    mySid = socket.id;
+
+    // ✅ request initial map after connection is established
+    socket.emit("request_state");
+    socket.emit("request_map");
+  });
+
+
+  function resize(){
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+  }
+  window.addEventListener("resize", resize);
+  resize();
+
+  let DEBUG_COLLISIONS = true; // toggle on/off
+
+
+  function setEntityInspectorEditable(canEdit) {
+    entityTitleInput.disabled = !canEdit;
+    entityBioInput.disabled = !canEdit;
+
+    entityAddActionBtn.disabled = !canEdit;
+    entitySaveBtn.disabled = !canEdit;
+    entityDeleteBtn.disabled = !canEdit;
+
+    // Optional visual cue
+    entityTitleInput.style.opacity = canEdit ? "1" : "0.7";
+    entityBioInput.style.opacity   = canEdit ? "1" : "0.7";
+  }
+
+
+  /* ================= PLAYER SPRITES ================= */
+
+  const SPRITE_W = 256;
+  const SPRITE_H = 256;
+  const DIRECTIONS = [0, 22, 45, 67, 90, 112, 135, 157, 180, 202, 225, 247, 270, 292, 315, 337];
+  const IDLE_FRAMES = 24;
+  const WALK_FRAMES = 24;
+  const ANIM_SPEED = 0.3;
+
+
+  const UNIT_RADIUS = 18;
+  const PLAYER_RADIUS = 20;
+  const TREE_RADIUS = 140;
+  const RESOURCE_RADIUS_COLLIDE = 15;
+
+  // Buildings use rectangle collision
+  const BUILD_COLLISION_PADDING = -50;
+
+
+  const UNIT_ATTACK_RANGE = PLAYER_RADIUS + UNIT_RADIUS + 10; // 10 extra for buffer
+  const UNIT_ATTACK_DPS = 30; // damage per second
+  const ATTACK_COOLDOWN = 1000 / 60; // 1 tick per frame (60fps)
+  const UNIT_MAX_HEALTH = 100;
+  const ATTACK_ANIM_FRAMES = 24;
+
+
+  // groundItems declared earlier in the global setup
+
+  const itemIcons = {
+    sword: new Image(),
+    shield: new Image()
+  };
+  itemIcons.sword.src = "static/items/sword.png";   // make these files
+  itemIcons.shield.src = "static/items/shield.png"; // or draw text fallback
+  const GROUND_ITEM_SIZE = 32;
+  const PICKUP_RADIUS = 26;
+
+  const PICKUP_DISTANCE = 120; // how close unit must be to pick up from ground
+  let currentItemsUnitId = null; // which unit's equipment UI is currently showing
+
+
+  function unitCanPickup(unit, groundItem) {
+    return Math.hypot(unit.x - groundItem.x, unit.y - groundItem.y) <= PICKUP_DISTANCE;
+  }
+
+  
+  // `draggingPickup` and `dragMouse` are declared in the main globals block; do not re-declare here.
+
+
+  function getFirstSelectedUnit() {
+    return myUnits.find(u => u.selected) || null;
+  }
+  function onGlobalDragMove(e) {
+    // keep mouse updated even over UI
+    dragMouse.x = e.clientX;
+    dragMouse.y = e.clientY;
+
+    // optional: block text selection while dragging
+    e.preventDefault();
+  }
+
+  function onGlobalDragEnd(e) {
+    // stop capturing
+    window.removeEventListener("mousemove", onGlobalDragMove, true);
+    window.removeEventListener("mouseup", onGlobalDragEnd, true);
+
+    if (!draggingPickup) return;
+
+    const gi = groundItems.find(x => x.id === draggingPickup.groundItemId);
+    const picker = myUnits.find(u => u.id === draggingPickup.unitId);
+    draggingPickup = null;
+
+    if (!gi || !picker) return;
+
+    // must still be in range
+    if (!unitCanPickup(picker, gi)) return;
+
+    // must drop on a slot
+    const slotEl = findSlotElementAtScreen(e.clientX, e.clientY);
+    if (!slotEl) return;
+
+    const slotIndex = parseInt(slotEl.dataset.slotIndex, 10);
+    const unitId = slotEl.dataset.unitId;
+
+    const targetUnit = myUnits.find(u => u.id === unitId);
+    if (!targetUnit) return;
+
+    if (!targetUnit.itemSlots) targetUnit.itemSlots = [null, null];
+    if (targetUnit.itemSlots[slotIndex]) return; // must be empty
+
+    socket.emit("pickup_item", {
+      unitId: targetUnit.id,
+      slotIndex,
+      groundItemId: gi.id
     });
+  }
 
-    // If slot has item: make it draggable out
-    if (slot) {
-      const chip = document.createElement("div");
-      chip.textContent = "drag";
-      chip.style.padding = "3px 8px";
-      chip.style.border = "1px solid #aaa";
-      chip.style.borderRadius = "6px";
-      chip.style.cursor = "grab";
-      chip.style.userSelect = "none";
-      chip.style.background = "rgba(0,0,0,0.3)";
-      chip.draggable = true;
 
-      chip.addEventListener("dragstart", (e) => {
-        const payload = {
-          type: "unit_item",
-          unitId: unit.id,
-          slotIndex: i,
-          item: slot
-        };
-        e.dataTransfer.setData("application/json", JSON.stringify(payload));
-        e.dataTransfer.effectAllowed = "move";
+  function renderUnitItems(unit) {
+    currentItemsUnitId = unit.id;
+
+    const itemsList = document.getElementById("items-list");
+    itemsList.innerHTML = "";
+
+    if (!unit.itemSlots) unit.itemSlots = [null, null];
+
+    for (let i = 0; i < 2; i++) {
+      const slot = unit.itemSlots[i];
+
+      const li = document.createElement("li");
+      li.style.display = "flex";
+      li.style.alignItems = "center";
+      li.style.justifyContent = "space-between";
+      li.style.border = "1px solid #777";
+      li.style.borderRadius = "6px";
+      li.style.padding = "6px";
+      li.style.marginBottom = "6px";
+      li.style.background = "rgba(255,255,255,0.05)";
+
+      li.dataset.slotIndex = String(i);
+      li.dataset.unitId = unit.id;
+
+      const left = document.createElement("div");
+      left.textContent = `Slot ${i + 1}: ${slot ? slot.name : "(empty)"}`;
+      li.appendChild(left);
+
+      // Allow dropping from ground -> slot OR slot -> slot
+      li.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        li.style.outline = "2px dashed #fff";
+      });
+      li.addEventListener("dragleave", () => {
+        li.style.outline = "";
       });
 
-      li.appendChild(chip);
+      li.addEventListener("drop", (e) => {
+        e.preventDefault();
+        li.style.outline = "";
+
+        const payloadStr = e.dataTransfer.getData("application/json");
+        if (!payloadStr) return;
+
+        let payload;
+        try { payload = JSON.parse(payloadStr); } catch { return; }
+
+        const targetUnit = myUnits.find(u => u.id === unit.id);
+        if (!targetUnit) return;
+        if (!targetUnit.itemSlots) targetUnit.itemSlots = [null, null];
+
+        const slotIndex = i;
+
+    if (payload.type === "ground_item") {
+      socket.emit("pickup_item", {
+        unitId: unit.id,
+        slotIndex: i,
+        groundItemId: payload.groundItemId
+      });
+      return;
     }
 
-    itemsList.appendChild(li);
-  }
-}
-
-
-
-
-canvas.addEventListener("dragover", (e) => {
-  e.preventDefault(); // allow drop
-});
-
-canvas.addEventListener("drop", (e) => {
-  e.preventDefault();
-
-  const payloadStr = e.dataTransfer.getData("application/json");
-  if (!payloadStr) return;
-
-  let payload;
-  try { payload = JSON.parse(payloadStr); } catch { return; }
-
-  // Convert screen -> world
-  const wx = camera.x + e.clientX - canvas.width / 2;
-  const wy = camera.y + e.clientY - canvas.height / 2;
-
-  // Dropping equipment item onto world => SERVER creates ground item
-  if (payload.type === "unit_item") {
-    socket.emit("drop_item", {
-      unitId: payload.unitId,
-      slotIndex: payload.slotIndex,
-      x: wx,
-      y: wy
-    });
-    return;
-  }
-});
-
-
-
-let entityMode = false;
-let selectedEntityId = null;
-
-const entityBtn = document.getElementById("entityBtn");
-const entityPanelEl = document.getElementById("entityPanel");
-const entityCloseBtn = document.getElementById("entityCloseBtn");
-const entityIdLine = document.getElementById("entityIdLine");
-const entityTitleInput = document.getElementById("entityTitleInput");
-const entityBioInput = document.getElementById("entityBioInput");
-const entityActionsList = document.getElementById("entityActionsList");
-const entityAddActionBtn = document.getElementById("entityAddActionBtn");
-const entitySaveBtn = document.getElementById("entitySaveBtn");
-const entityDeleteBtn = document.getElementById("entityDeleteBtn");
-
-entityBtn.onclick = () => {
-  entityMode = !entityMode;
-  entityBtn.textContent = entityMode ? "Entity: ON" : "Entity: OFF";
-};
-
-entityCloseBtn.onclick = () => {
-  entityPanelEl.style.display = "none";
-  selectedEntityId = null;
-};
-
-function ensureEntityMeta(o) {
-  if (!o.meta) o.meta = {};
-  if (!o.meta.entity) o.meta.entity = true;
-  if (typeof o.meta.title !== "string") o.meta.title = "";
-  if (typeof o.meta.bio !== "string") o.meta.bio = "";
-  if (!Array.isArray(o.meta.actions)) o.meta.actions = [];
-}
-
-function getDefaultEntityTitle(o) {
-  if (o.type === "building") return "Building";
-  if (o.type === "tile") return o.kind ? prettyName(o.kind) : "Tile";
-  return "Entity";
-}
-
-function openEntityInspector(o) {
-  ensureEntityMeta(o);
-  selectedEntityId = o.id;
-
-  entityIdLine.textContent =
-    `id: ${o.id} | type: ${o.type}${o.kind ? " | kind: " + o.kind : ""}`;
-
-  entityTitleInput.value = o.meta.title || getDefaultEntityTitle(o);
-  entityBioInput.value = o.meta.bio || "";
-
-  renderEntityActions(o);
-
-  // ✅ Only allow editing TILE title/bio when editor mode is ON
-  const isTile = (o.type === "tile");
-  const canEdit = !(isTile && !editorMode);
-  setEntityInspectorEditable(canEdit);
-
-  // Optional: make it obvious why it's locked
-  if (!canEdit) {
-    entityIdLine.textContent += "  |  (read-only: enable Editor to edit tile text)";
-  }
-
-  entityPanelEl.style.display = "block";
-}
-
-function renderEntityActions(o) {
-  entityActionsList.innerHTML = "";
-  ensureEntityMeta(o);
-
-  for (let i = 0; i < o.meta.actions.length; i++) {
-    const a = o.meta.actions[i];
-
-    const wrap = document.createElement("div");
-    wrap.style.display = "flex";
-    wrap.style.gap = "4px";
-    wrap.style.alignItems = "center";
-
-    const btn = document.createElement("button");
-    btn.textContent = a.label || `Action ${i+1}`;
-    btn.style.height = "26px";
-
-    // Clicking action in inspector triggers an event (so you can hook gameplay)
-    btn.onclick = () => {
-      socket.emit("entity_action", { entityId: o.id, actionId: a.id, label: a.label });
-      // optional local feedback:
-      // console.log("entity_action", o.id, a);
-    };
-
-    const del = document.createElement("button");
-    del.textContent = "✕";
-    del.style.height = "26px";
-    del.onclick = () => {
-      o.meta.actions.splice(i, 1);
-      renderEntityActions(o);
-    };
-
-    wrap.appendChild(btn);
-    wrap.appendChild(del);
-    entityActionsList.appendChild(wrap);
-  }
-}
-entityAddActionBtn.onclick = () => {
-  if (!selectedEntityId) return;
-  const o = mapObjects.find(x => x.id === selectedEntityId);
-  if (!o) return;
-
-  // If tile + editor off => no edits
-  if (o.type === "tile" && !editorMode) return;
-
-  ensureEntityMeta(o);
-
-  const label = prompt("Action label?", "Inspect");
-  if (!label) return;
-
-  o.meta.actions.push({ id: crypto.randomUUID(), label });
-  renderEntityActions(o);
-};
-
-
-entitySaveBtn.onclick = () => {
-  if (!selectedEntityId) return;
-  const o = mapObjects.find(x => x.id === selectedEntityId);
-  if (!o) return;
-
-  if (o.type === "tile" && !editorMode) return;
-
-  ensureEntityMeta(o);
-  o.meta.title = entityTitleInput.value || "";
-  o.meta.bio = entityBioInput.value || "";
-  socket.emit("update_map_object", { id: o.id, meta: o.meta });
-  entityPanelEl.style.display = "none";
-};
-
-entityDeleteBtn.onclick = () => {
-  if (!selectedEntityId) return;
-  const o = mapObjects.find(x => x.id === selectedEntityId);
-  if (!o) return;
-
-  if (o.type === "tile" && !editorMode) return;
-
-  socket.emit("delete_map_object", { id: selectedEntityId });
-  entityPanelEl.style.display = "none";
-  selectedEntityId = null;
-};
-
-
-
-
-const playerSprites = {
-  idle: {},
-  walk: {},
-  idleshadow:{},
-  walkshadow:{},
-};
-
-function pad(num, length=3) { return num.toString().padStart(length, "0"); }
-function padFrame(num, length=4) { return num.toString().padStart(length, "0"); }
-
-
-
-for (const deg of DIRECTIONS) {
-  const d = pad(deg);
-
-  playerSprites.idle[d] = [];
-  playerSprites.walk[d] = [];
-  playerSprites.idleshadow[d] = [];
-  playerSprites.walkshadow[d] = [];
-
-  // Idle frames
-  for (let i = 1; i <= IDLE_FRAMES; i++) {
-    const img = new Image();
-    img.src = `static/Idle/Body/${d}/Idle_Body_${d}_${padFrame(i)}.png`;
-    playerSprites.idle[d].push(img);
-    const imgshadow = new Image();
-    imgshadow.src = `static/Idle/Shadow/${d}/Idle_Shadow_${d}_${padFrame(i)}.png`;
-    playerSprites.idleshadow[d].push(imgshadow);
-  }
-
-  // Walk frames
-  for (let i = 1; i <= WALK_FRAMES; i++) {
-    const img = new Image();
-    img.src = `static/Run/Body/${d}/Run_Body_${d}_${padFrame(i)}.png`;
-    playerSprites.walk[d].push(img);
-    const imgshadow = new Image();
-    imgshadow.src = `static/Run/Shadow/${d}/Run_Shadow_${d}_${padFrame(i)}.png`;
-    playerSprites.walkshadow[d].push(imgshadow);
-  }
-}
-
-// Inside playerSprites
-playerSprites.attack = {};
-playerSprites.attackshadow = {};
-for(const deg of DIRECTIONS){
-    const d = pad(deg);
-    playerSprites.attack[d] = [];
-    playerSprites.attackshadow[d] = [];
-    for(let i=1;i<=ATTACK_ANIM_FRAMES;i++){
-        const img = new Image();
-        img.src = `static/Attack/Body/${d}/Attack1_Body_${d}_${padFrame(i)}.png`;
-        playerSprites.attack[d].push(img);
-
-        const imgShadow = new Image();
-        imgShadow.src = `static/Attack/Shadow/${d}/Attack1_Shadow_${d}_${padFrame(i)}.png`;
-        playerSprites.attackshadow[d].push(imgShadow);
-    }
-}
-
-
-
-
-
-function getDirKey(dx, dy) {
-    // invert dy because screen Y increases down but 000 is north
-    const angle = ((Math.atan2(dy, dx) * 180 / Math.PI + 90) % 360);
-
-    const dirs = [0,22,45,67,90,112,135,157,180,202,225,247,270,292,315,337];
-    let closest = dirs[0];
-    let minDiff = 360;
-
-    for(const d of dirs){
-        let diff = Math.abs(d - angle);
-        diff = Math.min(diff, 360 - diff);
-        if(diff < minDiff){
-            minDiff = diff;
-            closest = d;
+        // If dropping an entity item onto a unit slot
+        if (payload.type === "entity_item") {
+          // payload: { type: 'entity_item', entityId, slotIndex, item }
+          socket.emit("entity_give_to_unit", {
+            entityId: payload.entityId,
+            entitySlotIndex: payload.slotIndex,
+            unitId: unit.id,
+            slotIndex: i
+          });
+          return;
         }
-    }
 
-    return closest.toString().padStart(3,"0");
-}
+        // If dropping a unit item (slot -> slot) (optional nice feature):
+        if (payload.type === "unit_item") {
+          const fromUnit = myUnits.find(u => u.id === payload.unitId);
+          if (!fromUnit || !fromUnit.itemSlots) return;
 
+          const fromSlot = payload.slotIndex;
+          const moving = fromUnit.itemSlots[fromSlot];
+          if (!moving) return;
 
-function getUnitTargetOffset(idx, total) {
-    // Spread in a circle around target
-    const angle = (idx / total) * Math.PI * 2; // even spacing
-    const radius = total*10; // distance from center
-    return {
-        dx: Math.cos(angle) * radius,
-        dy: Math.sin(angle) * radius
-    };
-}
+          // If target slot occupied, swap
+          const temp = targetUnit.itemSlots[slotIndex];
+          targetUnit.itemSlots[slotIndex] = moving;
+          fromUnit.itemSlots[fromSlot] = temp || null;
 
+          renderUnitItems(targetUnit);
+          return;
+        }
+      });
 
-/* ================= LOCAL UNITS ================= */
-let myUnits = [];
+      // If slot has item: make it draggable out
+      if (slot) {
+        const chip = document.createElement("div");
+        chip.textContent = "drag";
+        chip.style.padding = "3px 8px";
+        chip.style.border = "1px solid #aaa";
+        chip.style.borderRadius = "6px";
+        chip.style.cursor = "grab";
+        chip.style.userSelect = "none";
+        chip.style.background = "rgba(0,0,0,0.3)";
+        chip.draggable = true;
 
-
-for(const u of myUnits){
-    u.hp = 100;           // max health
-    u.targetEnemy = null;  // {sid, unitIndex} or null
-    u.attackCooldown = 0;  // ms cooldown for attack ticks
-    u.attackFrame = 0;     // animation frame 0-23
-    u.manualMove = false; // true if user right-clicked to move
-}
-
-
-
-function findNearestEnemy(u) {
-    let nearest = null;
-    let nearestDist = Infinity;
-
-    // Check other players' units
-    for(const sid in players){
-        if(sid === mySid) continue;
-        const p = players[sid];
-        p.units.forEach((eu, idx) => {
-            if(eu.hp <= 0) return;
-            const dist = Math.hypot(u.x - eu.x, u.y - eu.y);
-            if(dist < nearestDist){
-                nearestDist = dist;
-                nearest = {
-    sid,
-    unitId: eu.id,
-    x: eu.x,
-    y: eu.y
-};
-
-            }
+        chip.addEventListener("dragstart", (e) => {
+          const payload = {
+            type: "unit_item",
+            unitId: unit.id,
+            slotIndex: i,
+            item: slot
+          };
+          e.dataTransfer.setData("application/json", JSON.stringify(payload));
+          e.dataTransfer.effectAllowed = "move";
         });
-    }
 
-    return nearest;
-}
-
-
-function getDirection(dx, dy) {
-  const angle = Math.atan2(dy, dx); // -PI to PI
-  let dir = Math.round((angle / (2 * Math.PI)) * DIRECTIONS);
-  if (dir < 0) dir += DIRECTIONS;
-  return dir % DIRECTIONS;
-}
-
-let players = {};
-let buildings = []; // list of {x, y, owner}
-
-
-
-
-
-
-
-/* ================= TILE ================= */
-const tile = new Image();
-tile.src = "static/grassbackground.png";
-const TILE_W = 5178;
-const TILE_H = 3009;
-const HALF_W = TILE_W/2.1;
-const HALF_H = TILE_H/2.1;
-
-
-const treeImg = new Image();
-treeImg.src = "static/tree.png";
-
-// Adjust to your sprite size
-const TREE_W = 250;
-const TREE_H = 250;
-
-// Trees will come from server
-let trees = []; // [{x,y},...]
-
-socket.on("server_trees", serverTrees => {
-    trees = serverTrees;
-});
-
-socket.connect();
-
-
-
-let editorCollisionEnabled = true;
-let editorCollisionW = 64;
-let editorCollisionH = 64;
-const COLLISION_STEP = 8;
-const COLLISION_MIN = 8;
-const COLLISION_MAX = 512;
-
-
-canvas.addEventListener("wheel", (e) => {
-  if (!editorMode) return;
-
-  e.preventDefault();
-
-  const delta = Math.sign(e.deltaY);
-
-  // SHIFT = scale the TILE DRAW SIZE (preview + placed size)
-if (e.shiftKey) {
-  editorTileOverride = true;
-
-  // Scale width, compute height from aspect ratio
-  const newW = Math.max(
-    TILE_SCALE_MIN,
-    Math.min(TILE_SCALE_MAX, editorTileW - delta * TILE_SCALE_STEP)
-  );
-
-  let newH = Math.round(newW * editorTileAspect);
-
-  // Clamp height too, and recompute width if height clamp hit
-  if (newH < TILE_SCALE_MIN) {
-    newH = TILE_SCALE_MIN;
-    const wFromH = Math.round(newH / editorTileAspect);
-    editorTileW = Math.max(TILE_SCALE_MIN, Math.min(TILE_SCALE_MAX, wFromH));
-    editorTileH = newH;
-  } else if (newH > TILE_SCALE_MAX) {
-    newH = TILE_SCALE_MAX;
-    const wFromH = Math.round(newH / editorTileAspect);
-    editorTileW = Math.max(TILE_SCALE_MIN, Math.min(TILE_SCALE_MAX, wFromH));
-    editorTileH = newH;
-  } else {
-    editorTileW = newW;
-    editorTileH = newH;
-  }
-
-  return;
-}
-
-
-  // Normal wheel = scale COLLISION rectangle (existing)
-  editorCollisionW = Math.max(
-    COLLISION_MIN,
-    Math.min(COLLISION_MAX, editorCollisionW - delta * COLLISION_STEP)
-  );
-  editorCollisionH = Math.max(
-    COLLISION_MIN,
-    Math.min(COLLISION_MAX, editorCollisionH - delta * COLLISION_STEP)
-  );
-}, { passive: false });
-
-
-function mergeUnitsPreserveFrames(localUnits, serverUnits) {
-  const byId = new Map(localUnits.map(u => [u.id, u]));
-  const merged = [];
-
-  for (const su0 of (serverUnits || [])) {
-    const existing = byId.get(su0.id);
-    const su = {
-      ...su0,
-      anim: su0.anim || "idle",
-      dir: String(su0.dir ?? "000").padStart(3,"0"),
-      hp: (su0.hp ?? existing?.hp ?? UNIT_MAX_HEALTH),
-      tx:   (su0.tx ?? su0.x),
-      ty:   (su0.ty ?? su0.y),
-    };
-
-    let lu = byId.get(su.id);
-if (!lu) {
-  lu = {
-    ...su,
-    frame: 0,
-    attackFrame: 0,
-    renderFrame: 0,
-    renderAttackFrame: 0,
-    lastX: su.x,
-    lastY: su.y,
-    selected: false,
-    manualMove: false,
-
-    // ✅ ADD THESE
-    targetEnemy: null,
-    attackCooldown: ATTACK_COOLDOWN, // allow immediate attack
-    harvesting: null,
-  };
-} else {
-      // update authoritative fields
-      lu.x = su.x; lu.y = su.y;
-      lu.tx = su.tx; lu.ty = su.ty;
-      lu.hp = su.hp;
-      lu.dir = su.dir;
-
-      if (lu.anim !== su.anim) {
-        lu.anim = su.anim;
-        lu.frame = 0;
-        lu.attackFrame = 0;
-        lu.renderFrame = 0;
-        lu.renderAttackFrame = 0;
+        li.appendChild(chip);
       }
-    }
-    merged.push(lu);
-  }
 
-  return merged;
-}
-
-
-
-/* ================= RESOURCES ================= */
-const RESOURCE_RADIUS = 40;
-const HARVEST_TIME = 10000; // ms
-
-const RESOURCE_STOP_RADIUS    = PLAYER_RADIUS + RESOURCE_RADIUS_COLLIDE + 1; // 36
-const RESOURCE_HARVEST_RADIUS = RESOURCE_STOP_RADIUS + 4;                    // 40
-
-
-
-let resources = [];          // {id, x, y}
-let harvesting = null;       // {resourceId, startTime}
-const resourceImg = new Image();
-resourceImg.src = "static/resource.png";
-const RES_W = 48;
-const RES_H = 48;
-
-let resourceCount = 0;
-let hoveredResource = null;
-
-let hoveredPlayerSid = null;  
-
-function spawnResources(){
-  const cols = 69;
-  const rows = 53;
-  const spacing = 180;
-  let id = 0;
-
-  for(let r=0;r<rows;r++){
-    for(let c=0;c<cols;c++){
-      if(Math.random() < 0.6){
-        resources.push({
-          id: id++,
-          x: (c - r) * spacing,
-          y: (c + r) * spacing / 2
-        });
-      }
-    }
-  }
-}
-spawnResources();
-
-function resolveCircleRect(unit, radius, rect) {
-  const left   = rect.x - rect.w / 2;
-  const right  = rect.x + rect.w / 2;
-  const top    = rect.y - rect.h / 2;
-  const bottom = rect.y + rect.h / 2;
-
-  const closestX = Math.max(left, Math.min(unit.x, right));
-  const closestY = Math.max(top, Math.min(unit.y, bottom));
-
-  const dx = unit.x - closestX;
-  const dy = unit.y - closestY;
-  const dist = Math.hypot(dx, dy);
-
-  if (dist === 0 || dist >= radius) return;
-
-  const overlap = radius - dist;
-  const nx = dx / dist;
-  const ny = dy / dist;
-
-  unit.x += nx * overlap;
-  unit.y += ny * overlap;
-}
-
-
-function resolveCircleCircle(unit, radius, cx, cy, cr) {
-  const dx = unit.x - cx;
-  const dy = unit.y - cy;
-  const dist = Math.hypot(dx, dy);
-  const minDist = radius + cr;
-
-  if (dist === 0 || dist >= minDist) return;
-
-  const overlap = minDist - dist;
-  const nx = dx / dist;
-  const ny = dy / dist;
-
-  unit.x += nx * overlap;
-  unit.y += ny * overlap;
-
-  if (DEBUG_COLLISIONS) {
-    const ux = canvas.width/2 + unit.x - camera.x;
-    const uy = canvas.height/2 + unit.y - camera.y;
-    drawCircleDebug(ux, uy, radius, "rgba(0,255,255,0.6)");
-    drawCircleDebug(canvas.width/2 + cx - camera.x, canvas.height/2 + cy - camera.y, cr, "rgba(255,0,0,0.35)");
-  }
-}
-
-function resolveCircleBuilding(unit, radius, b) {
-  const left   = b.x - BUILD_W / 2 - BUILD_COLLISION_PADDING;
-  const right  = b.x + BUILD_W / 2 + BUILD_COLLISION_PADDING;
-  const top    = b.y - BUILD_H / 2 - BUILD_COLLISION_PADDING;
-  const bottom = b.y + BUILD_H / 2 + BUILD_COLLISION_PADDING;
-
-  const closestX = Math.max(left, Math.min(unit.x, right));
-  const closestY = Math.max(top, Math.min(unit.y, bottom));
-
-  const dx = unit.x - closestX;
-  const dy = unit.y - closestY;
-  const dist = Math.hypot(dx, dy);
-
-  if (dist === 0 || dist >= radius) return;
-
-  const overlap = radius - dist;
-  const nx = dx / dist;
-  const ny = dy / dist;
-
-  unit.x += nx * overlap;
-  unit.y += ny * overlap;
-
-  if (DEBUG_COLLISIONS) {
-    drawRectDebug(
-      canvas.width/2 + (left+right)/2 - camera.x,
-      canvas.height/2 + (top+bottom)/2 - camera.y,
-      (right-left),
-      (bottom-top),
-      "rgba(255,0,0,0.35)"
-    );
-  }
-}
-
-function advanceLocalAnim(u) {
-  if (u.anim === "attack") {
-    u.attackFrame = ((u.attackFrame ?? 0) + ANIM_SPEED) % ATTACK_ANIM_FRAMES;
-  } else if (u.anim === "walk") {
-    u.frame = ((u.frame ?? 0) + ANIM_SPEED) % WALK_FRAMES;
-  } else {
-    // idle (default)
-    u.frame = ((u.frame ?? 0) + ANIM_SPEED) % IDLE_FRAMES;
-  }
-}
-
-
-function applyCollisions(u) {
-  // Trees (circle-circle)
-  for (const t of trees) {
-    resolveCircleCircle(u, PLAYER_RADIUS, t.x, t.y - 150, TREE_RADIUS);
-  }
-
-  // Resources (circle-circle)
-  for (const r of resources) {
-    resolveCircleCircle(u, PLAYER_RADIUS, r.x, r.y, RESOURCE_RADIUS_COLLIDE);
-  }
-
-  // Buildings (circle-rect using BUILD_W/H)
-  for (const b of buildings) {
-    resolveCircleBuilding(u, PLAYER_RADIUS, b);
-  }
-
-  // Tile collisions (keep your rect version)
-  for (const o of mapObjects) {
-    if (o.type !== "tile") continue;
-    if (!o.meta || !o.meta.collides) continue;
-
-    resolveCircleRect(u, PLAYER_RADIUS, {
-      x: o.x, y: o.y,
-      w: o.meta.cw, h: o.meta.ch
-    });
-  }
-
-  // Other local units (circle-circle)
-  for (const other of myUnits) {
-    if (other === u) continue;
-    resolveCircleCircle(u, UNIT_RADIUS, other.x, other.y, UNIT_RADIUS);
-  }
-
-  // Other players units (circle-circle)
-  for (const sid in players) {
-    if (sid === mySid) continue;
-    for (const opUnit of players[sid].units) {
-      resolveCircleCircle(u, PLAYER_RADIUS, opUnit.x, opUnit.y, UNIT_RADIUS);
-    }
-  }
-}
-
-
-
-  
-
-
-
-/* ================= RTS INPUT ================= */
-let selecting=false;
-let selectStart={x:0,y:0};
-let mouse={x:0,y:0};
-let buildMode=false;
-let localBuildingPlaced=false;
-
-canvas.addEventListener("mousemove", e=>{
-  mouse.x = e.clientX;
-  mouse.y = e.clientY;
-
-  const wx = camera.x + mouse.x - canvas.width/2;
-  const wy = camera.y + mouse.y - canvas.height/2;
-
-  hoveredResource = null;
-  hoveredPlayerSid = null;
-
-    // Ground item hover (priority 0)
-  hoveredGroundItem = null;
-  for (const it of groundItems) {
-    if (Math.hypot(it.x - wx, it.y - wy) < 18) {
-      hoveredGroundItem = it;
-      canvas.style.cursor = "grab";
-      break;
-    }
-  }
- if (hoveredGroundItem && !draggingPickup) return;
-
-
-  // Resource hover (priority 1)
-  for(const r of resources){
-    if(Math.hypot(r.x-wx, r.y-wy) < RESOURCE_RADIUS){
-      hoveredResource = r;
-      canvas.style.cursor = "pointer";
-      return;
+      itemsList.appendChild(li);
     }
   }
 
-  // Player hover (priority 2)
-  for(const sid in players){
-    if(sid === mySid) continue;
-    const p = players[sid];
-    if(Math.hypot(p.x-wx, p.y-wy) < 20){
-      hoveredPlayerSid = sid;
-      canvas.style.cursor = "crosshair";
-      return;
-    }
-  }
-
-  canvas.style.cursor = "default";
-});
-
-
-// { groundItemId, offsetX, offsetY, unitId }
-
-function getFirstSelectedUnit() {
-  return myUnits.find(u => u.selected) || null;
-}
-
-function findSlotElementAtScreen(x, y) {
-  const el = document.elementFromPoint(x, y);
-  if (!el) return null;
-  // climb up to the LI
-  return el.closest && el.closest("#items-list li");
-}
 
 
 
-function updateSelectedUnits() {
-    // Build the lookup table from current live data
-    allUnits[mySid] = myUnits;
-    for (const sid in players) {
-        allUnits[sid] = players[sid].units || [];
-    }
+  canvas.addEventListener("dragover", (e) => {
+    e.preventDefault(); // allow drop
+  });
 
-    selectedUnits = myUnits.filter(u => u.selected).map(u => u.id);
-
-    renderUnitPanel();
-
-    // If nothing selected, clear items UI
-    if (selectedUnits.length === 0) {
-        document.getElementById("items-list").innerHTML = "";
-        return;
-    }
-
-    // Auto-show items for first selected unit (local units have items)
-    const unit = findUnitById(selectedUnits[0]);
-    if (unit) renderUnitItems(unit);
-}
-
-
-function hitTestMapObject(wx, wy) {
-  // pick topmost by render order: scan from end (mapObjects drawn in order)
-  for (let i = mapObjects.length - 1; i >= 0; i--) {
-    const o = mapObjects[i];
-    if (!o.meta || !o.meta.entity) continue;
-
-    if (o.type === "building") {
-      // building uses BUILD_W/H
-      if (Math.abs(wx - o.x) < BUILD_W / 2 && Math.abs(wy - o.y) < BUILD_H / 2) return o;
-    } else if (o.type === "tile") {
-      const def = TILE_DEFS[o.kind] || { w: 256, h: 256 };
-      const w = o.meta?.w ?? def.w;
-      const h = o.meta?.h ?? def.h;
-      if (Math.abs(wx - o.x) < w / 2 && Math.abs(wy - o.y) < h / 2) return o;
-    }
-  }
-  return null;
-}
-
-
-
-
-canvas.addEventListener("mousedown", e => {
-  const wx = camera.x + mouse.x - canvas.width / 2;
-  const wy = camera.y + mouse.y - canvas.height / 2;
-
-  // ✅ Click entity to inspect (works even when editorMode is off)
-if (e.button === 0) {
-  const hitEntity = hitTestMapObject(wx, wy);
-  if (hitEntity) {
-    openEntityInspector(hitEntity);
+  canvas.addEventListener("drop", (e) => {
     e.preventDefault();
-    return;
-  }
-}
 
+    const payloadStr = e.dataTransfer.getData("application/json");
+    if (!payloadStr) return;
 
-    if (editorMode && e.button === 0) {
-    if (e.shiftKey) {
-      // delete nearest within radius
-      let nearest = null, best = 40;
-      for (const o of mapObjects) {
-        const d = Math.hypot(o.x - wx, o.y - wy);
-        if (d < best) { best = d; nearest = o; }
-      }
-      if (nearest) socket.emit("delete_map_object", { id: nearest.id });
+    let payload;
+    try { payload = JSON.parse(payloadStr); } catch { return; }
+
+    // Convert screen -> world
+    const wx = camera.x + e.clientX - canvas.width / 2;
+    const wy = camera.y + e.clientY - canvas.height / 2;
+
+    // Dropping equipment item onto world => SERVER creates ground item
+    if (payload.type === "unit_item") {
+      socket.emit("drop_item", {
+        unitId: payload.unitId,
+        slotIndex: payload.slotIndex,
+        x: wx,
+        y: wy
+      });
       return;
     }
+  });
 
-const [type, kind] = brushSelect.value.split(":");
 
-let meta = (type === "tile") ? {
-  collides: editorCollisionEnabled,
-  cw: editorCollisionW,
-  ch: editorCollisionH,
-  w: editorTileW,
-  h: editorTileH
-} : {};
 
-if (entityMode) {
-  meta = {
-    ...meta,
-    entity: true,
-    title: (type === "tile") ? prettyName(kind) : "Building",
-    bio: "",
-    actions: []
+
+  function ensureEntityMeta(o) {
+    if (!o.meta) o.meta = {};
+    if (!o.meta.entity) o.meta.entity = true;
+    if (typeof o.meta.title !== "string") o.meta.title = "";
+    if (typeof o.meta.bio !== "string") o.meta.bio = "";
+    if (!Array.isArray(o.meta.actions)) o.meta.actions = [];
+  }
+
+  function getDefaultEntityTitle(o) {
+    if (o.type === "building") return "Building";
+    if (o.type === "tile") return o.kind ? prettyName(o.kind) : "Tile";
+    return "Entity";
+  }
+
+  function openEntityInspector(o) {
+    ensureEntityMeta(o);
+    selectedEntityId = o.id;
+
+    entityIdLine.textContent =
+      `id: ${o.id} | type: ${o.type}${o.kind ? " | kind: " + o.kind : ""}`;
+
+    entityTitleInput.value = o.meta.title || getDefaultEntityTitle(o);
+    entityBioInput.value = o.meta.bio || "";
+
+    renderEntityActions(o);
+
+    // ✅ Only allow editing TILE title/bio when editor mode is ON
+    const isTile = (o.type === "tile");
+    const canEdit = !(isTile && !editorMode);
+    setEntityInspectorEditable(canEdit);
+
+    // Optional: make it obvious why it's locked
+    if (!canEdit) {
+      entityIdLine.textContent += "  |  (read-only: enable Editor to edit tile text)";
+    }
+
+    // Render entity item slots
+    const entityItemsEl = document.getElementById("entity-items-list");
+    if (entityItemsEl) {
+      entityItemsEl.innerHTML = "";
+      const slots = o.itemSlots || [];
+      for (let si = 0; si < Math.max(2, slots.length); si++) {
+        const s = slots[si] || null;
+        const li = document.createElement("li");
+        li.style.display = "flex";
+        li.style.justifyContent = "space-between";
+        li.style.alignItems = "center";
+        li.style.border = "1px solid #666";
+        li.style.padding = "6px";
+        li.style.marginBottom = "6px";
+        li.dataset.slotIndex = si;
+        li.dataset.entityId = o.id;
+
+        const left = document.createElement("div");
+        left.textContent = `Slot ${si+1}: ${s ? s.name : "(empty)"}`;
+        li.appendChild(left);
+
+        // allow dropping unit_item onto entity slot
+        li.addEventListener("dragover", (e) => { e.preventDefault(); li.style.outline = "2px dashed #fff"; });
+        li.addEventListener("dragleave", () => { li.style.outline = ""; });
+        li.addEventListener("drop", (e) => {
+          e.preventDefault(); li.style.outline = "";
+          const payloadStr = e.dataTransfer.getData("application/json");
+          if (!payloadStr) return;
+          let payload; try { payload = JSON.parse(payloadStr); } catch { return; }
+          // dropping a unit item onto entity
+          console.log("entity-slot drop", { entityId: o.id, slotIndex: si, payload });
+          if (payload.type === "unit_item") {
+            socket.emit("unit_give_to_entity", {
+              unitId: payload.unitId,
+              unitSlotIndex: payload.slotIndex,
+              entityId: o.id,
+              entitySlotIndex: si
+            });
+          }
+        });
+
+        // if slot has item, make draggable
+        if (s) {
+          const chip = document.createElement("div");
+          chip.textContent = s.name || "item";
+          chip.style.padding = "3px 8px";
+          chip.style.border = "1px solid #aaa";
+          chip.style.borderRadius = "6px";
+          chip.style.cursor = "grab";
+          chip.draggable = true;
+          chip.addEventListener("dragstart", (e) => {
+            const payload = { type: "entity_item", entityId: o.id, slotIndex: si, item: s };
+            e.dataTransfer.setData("application/json", JSON.stringify(payload));
+            e.dataTransfer.effectAllowed = "move";
+          });
+          li.appendChild(chip);
+        }
+
+        entityItemsEl.appendChild(li);
+      }
+    }
+
+      // Render Abilities
+      const abilitiesEl = document.getElementById("entity-abilities-list");
+      if (abilitiesEl) {
+        abilitiesEl.innerHTML = "";
+        // Only town_center entities have spawn ability
+        const isTownCenter = (o.kind === "town_center" || (o.meta && o.meta.kind === "town_center"));
+        if (isTownCenter) {
+          const btn = document.createElement("button");
+          btn.textContent = "Spawn Unit";
+          btn.style.height = "30px";
+          btn.onclick = () => {
+            if (!o || !o.id) return;
+            socket.emit("spawn_unit_from_entity", { entityId: o.id });
+          };
+          abilitiesEl.appendChild(btn);
+        }
+      }
+
+      entityPanelEl.style.display = "block";
+  }
+
+  function renderEntityActions(o) {
+    entityActionsList.innerHTML = "";
+    ensureEntityMeta(o);
+
+    for (let i = 0; i < o.meta.actions.length; i++) {
+      const a = o.meta.actions[i];
+
+      const wrap = document.createElement("div");
+      wrap.style.display = "flex";
+      wrap.style.gap = "4px";
+      wrap.style.alignItems = "center";
+
+      const btn = document.createElement("button");
+      btn.textContent = a.label || `Action ${i+1}`;
+      btn.style.height = "26px";
+
+      // Clicking action in inspector triggers an event (so you can hook gameplay)
+      btn.onclick = () => {
+        socket.emit("entity_action", { entityId: o.id, actionId: a.id, label: a.label });
+        // optional local feedback:
+        // console.log("entity_action", o.id, a);
+      };
+
+      const del = document.createElement("button");
+      del.textContent = "✕";
+      del.style.height = "26px";
+      del.onclick = () => {
+        o.meta.actions.splice(i, 1);
+        renderEntityActions(o);
+      };
+
+      wrap.appendChild(btn);
+      wrap.appendChild(del);
+      entityActionsList.appendChild(wrap);
+    }
+  }
+  entityAddActionBtn.onclick = () => {
+    if (!selectedEntityId) return;
+    const o = mapObjects.find(x => x.id === selectedEntityId);
+    if (!o) return;
+
+    // If tile + editor off => no edits
+    if (o.type === "tile" && !editorMode) return;
+
+    ensureEntityMeta(o);
+
+    const label = prompt("Action label?", "Inspect");
+    if (!label) return;
+
+    o.meta.actions.push({ id: crypto.randomUUID(), label });
+    renderEntityActions(o);
   };
-}
 
 
-socket.emit("place_map_object", { type, kind, x: wx, y: wy, meta });
+  entitySaveBtn.onclick = () => {
+    if (!selectedEntityId) return;
+    const o = mapObjects.find(x => x.id === selectedEntityId);
+    if (!o) return;
+
+    if (o.type === "tile" && !editorMode) return;
+
+    ensureEntityMeta(o);
+    o.meta.title = entityTitleInput.value || "";
+    o.meta.bio = entityBioInput.value || "";
+    socket.emit("update_map_object", { id: o.id, meta: o.meta });
+    entityPanelEl.style.display = "none";
+  };
+
+  entityDeleteBtn.onclick = () => {
+    if (!selectedEntityId) return;
+    const o = mapObjects.find(x => x.id === selectedEntityId);
+    if (!o) return;
+
+    if (o.type === "tile" && !editorMode) return;
+
+    socket.emit("delete_map_object", { id: selectedEntityId });
+    entityPanelEl.style.display = "none";
+    selectedEntityId = null;
+  };
 
 
 
-    return;
-  }
 
-if (e.button === 0) {
-  const picker = getFirstSelectedUnit();
-  if (picker) {
-    const hit = groundItems.find(it => Math.hypot(it.x - wx, it.y - wy) < 18);
-    if (hit && unitCanPickup(picker, hit)) {
-      draggingPickup = { groundItemId: hit.id, unitId: picker.id };
+  const playerSprites = {
+    idle: {},
+    walk: {},
+    idleshadow:{},
+    walkshadow:{},
+  };
 
-      dragMouse.x = e.clientX;
-      dragMouse.y = e.clientY;
+  function pad(num, length=3) { return num.toString().padStart(length, "0"); }
+  function padFrame(num, length=4) { return num.toString().padStart(length, "0"); }
 
-      // CAPTURE events globally so UI can't "steal" the drag
-      window.addEventListener("mousemove", onGlobalDragMove, true);
-      window.addEventListener("mouseup", onGlobalDragEnd, true);
 
-      e.preventDefault();
-      return;
+
+  for (const deg of DIRECTIONS) {
+    const d = pad(deg);
+
+    playerSprites.idle[d] = [];
+    playerSprites.walk[d] = [];
+    playerSprites.idleshadow[d] = [];
+    playerSprites.walkshadow[d] = [];
+
+    // Idle frames
+    for (let i = 1; i <= IDLE_FRAMES; i++) {
+      const img = new Image();
+      img.src = `static/Idle/Body/${d}/Idle_Body_${d}_${padFrame(i)}.png`;
+      playerSprites.idle[d].push(img);
+      const imgshadow = new Image();
+      imgshadow.src = `static/Idle/Shadow/${d}/Idle_Shadow_${d}_${padFrame(i)}.png`;
+      playerSprites.idleshadow[d].push(imgshadow);
+    }
+
+    // Walk frames
+    for (let i = 1; i <= WALK_FRAMES; i++) {
+      const img = new Image();
+      img.src = `static/Run/Body/${d}/Run_Body_${d}_${padFrame(i)}.png`;
+      playerSprites.walk[d].push(img);
+      const imgshadow = new Image();
+      imgshadow.src = `static/Run/Shadow/${d}/Run_Shadow_${d}_${padFrame(i)}.png`;
+      playerSprites.walkshadow[d].push(imgshadow);
     }
   }
-}
 
+  // Inside playerSprites
+  playerSprites.attack = {};
+  playerSprites.attackshadow = {};
+  for(const deg of DIRECTIONS){
+      const d = pad(deg);
+      playerSprites.attack[d] = [];
+      playerSprites.attackshadow[d] = [];
+      for(let i=1;i<=ATTACK_ANIM_FRAMES;i++){
+          const img = new Image();
+          img.src = `static/Attack/Body/${d}/Attack1_Body_${d}_${padFrame(i)}.png`;
+          playerSprites.attack[d].push(img);
 
-
-  if (e.button === 0) { // left click
-
-    // ===== Build placement =====
-  if (buildMode && !localBuildingPlaced) {
-    const newBuilding = { x: wx, y: wy, owner: mySid, selected: true, queue: [] };
-    buildings.push(newBuilding);
-    localBuildingPlaced = true;
-    buildMode = false;
-    buildBtn.disabled = true;
-    socket.emit("place_building", { x: wx, y: wy });
-    return;
-  }
-
-
-
-
-    // ===== Check for building click =====
-    let clickedBuilding = null;
-    for (const b of buildings) {
-      const bx = canvas.width / 2 + b.x - camera.x;
-      const by = canvas.height / 2 + b.y - camera.y;
-      const dx = Math.abs(mouse.x - bx);
-      const dy = Math.abs(mouse.y - by);
-      if (dx < BUILD_W / 2 && dy < BUILD_H / 2) {
-        clickedBuilding = b;
-        break;
+          const imgShadow = new Image();
+          imgShadow.src = `static/Attack/Shadow/${d}/Attack1_Shadow_${d}_${padFrame(i)}.png`;
+          playerSprites.attackshadow[d].push(imgShadow);
       }
-    }
-
-    if (clickedBuilding && clickedBuilding.owner === mySid) {
-      buildings.forEach(b => b.selected = false);
-      clickedBuilding.selected = true;
-      buildingPanel.style.display = "block";
-      panel.style.display = "none";
-      selecting = false;
-      updateSelectedUnits(); // <-- sync panel
-      return;
-    }
-
-    // ===== Check for unit click =====
-    let clickedUnit = null;
-    for (const u of myUnits) {
-      const ux = canvas.width / 2 + u.x - camera.x;
-      const uy = canvas.height / 2 + u.y - camera.y;
-      if (Math.hypot(mouse.x - ux, mouse.y - uy) < 20) {
-        clickedUnit = u;
-        break;
-      }
-    }
-
-    if (clickedUnit) {
-      myUnits.forEach(u => u.selected = false);
-      clickedUnit.selected = true;
-
-        updateSelectedUnits(); // <-- sync panel
-      selecting = false;
-      return;
-    }
-
-    // ===== Clicked empty space =====
-    buildings.forEach(b => b.selected = false);
-    buildingPanel.style.display = "none";
-    myUnits.forEach(u => u.selected = false);
-    updateSelectedUnits(); // <-- sync panel
-    // Start selection box
-    selecting = true;
-    selectStart.x = mouse.x;
-    selectStart.y = mouse.y;
   }
-});
 
 
-canvas.addEventListener("mouseup", (e) => {
-  if (e.button !== 0) return;
-  if (!draggingPickup) return;
 
-  const gi = groundItems.find(x => x.id === draggingPickup.groundItemId);
-  const picker = myUnits.find(u => u.id === draggingPickup.unitId);
-  draggingPickup = null;
 
-  if (!gi || !picker) return;
 
-  // Must still be in range at drop time
-  if (!unitCanPickup(picker, gi)) return;
 
-  // Must drop onto a slot in the UI
-  const slotEl = findSlotElementAtScreen(e.clientX, e.clientY);
-  if (!slotEl) return;
 
-  const slotIndex = parseInt(slotEl.dataset.slotIndex, 10);
-  const unitId = slotEl.dataset.unitId;
+  /* ================= LOCAL UNITS ================= */
+  // `myUnits` is declared in the globals block at the top; do not re-declare.
 
-  // Only allow equipping to LOCAL unit equipment panel
-  const targetUnit = myUnits.find(u => u.id === unitId);
-  if (!targetUnit) return;
 
-  if (!targetUnit.itemSlots) targetUnit.itemSlots = [null, null];
+  for(const u of myUnits){
+      u.hp = 100;           // max health
+      u.targetEnemy = null;  // {sid, unitIndex} or null
+      u.attackCooldown = 0;  // ms cooldown for attack ticks
+      u.attackFrame = 0;     // animation frame 0-23
+      u.manualMove = false; // true if user right-clicked to move
+  }
 
-  // slot must be empty
-  if (targetUnit.itemSlots[slotIndex]) return;
 
-  // equip
-  socket.emit("pickup_item", {
-    unitId: targetUnit.id,
-    slotIndex,
-    groundItemId: gi.id
+
+
+
+
+  function getDirection(dx, dy) {
+    const angle = Math.atan2(dy, dx); // -PI to PI
+    let dir = Math.round((angle / (2 * Math.PI)) * DIRECTIONS);
+    if (dir < 0) dir += DIRECTIONS;
+    return dir % DIRECTIONS;
+  }
+
+  // `players` and `buildings` are declared in the globals block at the top; do not re-declare.
+
+
+
+
+
+
+
+  /* ================= TILE ================= */
+  const tile = new Image();
+  tile.src = "static/grassbackground.png";
+  const TILE_W = 5178;
+  const TILE_H = 3009;
+  const HALF_W = TILE_W/2.1;
+  const HALF_H = TILE_H/2.1;
+
+
+  const treeImg = new Image();
+  treeImg.src = "static/tree.png";
+
+  // Adjust to your sprite size
+  const TREE_W = 250;
+  const TREE_H = 250;
+
+  // Trees will come from server
+
+  socket.on("server_trees", serverTrees => {
+      trees = serverTrees;
   });
-});
+
+  socket.connect();
 
 
 
-
-canvas.addEventListener("mouseup", e=>{
-  if(e.button===0){
-    selecting=false;
-
-    const x1=Math.min(selectStart.x,mouse.x);
-    const y1=Math.min(selectStart.y,mouse.y);
-    const x2=Math.max(selectStart.x,mouse.x);
-    const y2=Math.max(selectStart.y,mouse.y);
-    for(const u of myUnits){
-      const sx=canvas.width/2+u.x-camera.x;
-      const sy=canvas.height/2+u.y-camera.y;
-      u.selected=(sx>=x1&&sx<=x2 && sy>=y1&&sy<=y2);
-    }
-    updateSelectedUnits(); // <-- sync panel
-  } 
-
-      if(e.button === 2){ // right click
-        const wx = camera.x + mouse.x - canvas.width/2;
-        const wy = camera.y + mouse.y - canvas.height/2;
-
-        let clickedResource = null;
-        let clickedPlayerSid = null;
-
-        for(const r of resources){
-            if(Math.hypot(r.x-wx,r.y-wy) < RESOURCE_RADIUS){
-                clickedResource = r;
-                break;
-            }
-        }
-
-        if(!clickedResource){
-            for(const sid in players){
-                if(sid === mySid) continue;
-                const p = players[sid];
-                if(Math.hypot(p.x-wx,p.y-wy) < 20){
-                    clickedPlayerSid = sid;
-                    break;
-                }
-            }
-        }
-
-        const selectedUnits = myUnits.filter(u => u.selected);
-
-        selectedUnits.forEach(u => {
-  u.targetEnemy = null;
-  harvesting = null;
-
-  if (clickedResource) {
-    // ✅ resource gather command
-    u.targetResource = clickedResource.id;
-    u.manualMove = false;            // ✅ IMPORTANT: don't get stuck in manualMove
-    u.tx = clickedResource.x;        // move toward resource center
-    u.ty = clickedResource.y;
-  } else {
-    // normal move command
-    u.targetResource = null;
-    u.tx = wx;
-    u.ty = wy;
-    u.manualMove = true;
-  }
-});
+  const COLLISION_STEP = 8;
+  const COLLISION_MIN = 8;
+  const COLLISION_MAX = 512;
 
 
-        
-    }
-});
+  function mergeUnitsPreserveFrames(localUnits, serverUnits) {
+    const byId = new Map(localUnits.map(u => [u.id, u]));
+    const merged = [];
 
-canvas.addEventListener("contextmenu", e=>e.preventDefault());
+    for (const su0 of (serverUnits || [])) {
+      const existing = byId.get(su0.id);
+      const su = {
+        ...su0,
+        anim: su0.anim || "idle",
+        dir: String(su0.dir ?? "000").padStart(3,"0"),
+        hp: (su0.hp ?? existing?.hp ?? UNIT_MAX_HEALTH),
+        tx:   (su0.tx ?? su0.x),
+        ty:   (su0.ty ?? su0.y),
+      };
 
-const createUnitBtn = document.getElementById("createUnitBtn");
-createUnitBtn.onclick = () => {
-    const selectedBuilding = buildings.find(b => b.selected && b.owner === mySid);
-    if (!selectedBuilding) return;
+      let lu = byId.get(su.id);
+  if (!lu) {
+    lu = {
+      ...su,
+      frame: 0,
+      attackFrame: 0,
+      renderFrame: 0,
+      renderAttackFrame: 0,
+      lastX: su.x,
+      lastY: su.y,
+      selected: false,
+      manualMove: false,
 
-    const radius = BUILD_W / 2 + 30; // spawn outside building
-    const unitsToSpawn = 1; // you can increase this if creating multiple units at once
-
-    // Count how many units are already around this building
-    const existingUnits = myUnits.filter(u => Math.hypot(u.x - selectedBuilding.x, u.y - selectedBuilding.y) < radius + 20);
-    const startIndex = existingUnits.length;
-
-    for (let i = 0; i < unitsToSpawn; i++) {
-        const idx = startIndex + i;
-        const angle = (idx * 45) * Math.PI / 180; // spread units 45° apart
-        const spawnX = selectedBuilding.x + Math.cos(angle) * radius;
-        const spawnY = selectedBuilding.y + Math.sin(angle) * radius;
-
-const newUnit = {
-    id: crypto.randomUUID(), // or a simple incrementing counter
-    x: spawnX,
-    y: spawnY,
-    tx: spawnX,
-    ty: spawnY,
-    selected: false,
-    targetResource: null,
-    targetEnemy: null,
-    anim: "idle",
-    frame: 0,
-    attackFrame: 0,
-    dir: "000",
-    hp: UNIT_MAX_HEALTH,
-    attackCooldown: 0,
-    manualMove: false,
-    lastX: spawnX,
-    lastY: spawnY,
-   itemSlots: [
-  { id: crypto.randomUUID(), name: "sword" },
-  { id: crypto.randomUUID(), name: "shield" }
-]
-};
-myUnits.push(newUnit);
-socket.emit("spawn_unit", { unit: newUnit });
-
-    }
-};
-
-
-
-buildBtn.onclick = ()=>{ if(!localBuildingPlaced) buildMode=true; };
-
-/* ================= COMBAT ================= */
-const ATTACK_RANGE = 80;
-const DPS = 10; // damage per second
-
-let targetPlayerSid = null;
-
-let playerHealth = {};
-const MAX_HEALTH = 100;
-
-/* ================= SOCKET STATE ================= */
-// Keep player positions/colors from state
-// Update remote units
-
-
-
-
-socket.on("state", (state) => {
-  console.log("STATE: before merge myUnits", myUnits.length,
-            "server me.units", state.players?.[mySid]?.units?.length);
-
-  if (state.ground_items) groundItems = state.ground_items;
-
-  // ✅ FIRST: sync my own units from server (adopt server ids)
-  const me = state.players?.[mySid];
-  if (me && Array.isArray(me.units)) {
-    myUnits = mergeUnitsPreserveFrames(myUnits, me.units);
-  }
-
-  for (const sid in players){
-          const first = players[sid].units[0];
-  if (first) { players[sid].x = first.x; players[sid].y = first.y; }
-  }
-
-
-  // existing: remove players no longer on server
-  for (const sid in players) {
-    if (!state.players[sid] || !state.players[sid].units || state.players[sid].units.length === 0) {
-      delete players[sid];
-    }
-  }
-
-  // ✅ sync other players as you already do (but using same merge helper)
-  for (const sid in state.players) {
-
-    if (sid === mySid) continue;
-    const sp = state.players[sid];
-
-    if (!sp.units || sp.units.length === 0) {
-      delete players[sid];
-      continue;
-    }
-
-    if (!players[sid]) players[sid] = { x: 0, y: 0, color: "#fff", units: [] };
-
-    players[sid].x = sp.x;
-    players[sid].y = sp.y;
-    players[sid].color = sp.color;
-
-    players[sid].units = mergeUnitsPreserveFrames(players[sid].units || [], sp.units);
-  }
-
-  // buildings...
-  buildings = state.buildings.map(sb => {
-    const existing = buildings.find(b => b.x === sb.x && b.y === sb.y && b.owner === sb.owner);
-    return {
-      ...sb,
-      selected: existing ? existing.selected : false,
-      queue: existing ? existing.queue : []
+      // ✅ ADD THESE
+      targetEnemy: null,
+      attackCooldown: ATTACK_COOLDOWN, // allow immediate attack
+      harvesting: null,
     };
+  } else {
+        // update authoritative fields
+        lu.x = su.x; lu.y = su.y;
+        lu.tx = su.tx; lu.ty = su.ty;
+        lu.hp = su.hp;
+        lu.dir = su.dir;
+
+        if (lu.anim !== su.anim) {
+          lu.anim = su.anim;
+          lu.frame = 0;
+          lu.attackFrame = 0;
+          lu.renderFrame = 0;
+          lu.renderAttackFrame = 0;
+        }
+      }
+      merged.push(lu);
+    }
+
+    return merged;
+  }
+
+
+
+  /* ================= RESOURCES ================= */
+  const RESOURCE_RADIUS = 40;
+  const HARVEST_TIME = 10000; // ms
+
+  const RESOURCE_STOP_RADIUS    = PLAYER_RADIUS + RESOURCE_RADIUS_COLLIDE + 1; // 36
+  const RESOURCE_HARVEST_RADIUS = RESOURCE_STOP_RADIUS + 4;                    // 40
+
+
+
+  resources = resources || [];          // {id, x, y}
+  let harvesting = null;       // {resourceId, startTime}
+  const resourceImg = new Image();
+  resourceImg.src = "static/resource.png";
+  const RES_W = 48;
+  const RES_H = 48;
+
+  resourceCount = resourceCount || 0;
+  hoveredResource = hoveredResource || null;
+
+  hoveredPlayerSid = hoveredPlayerSid || null;  
+
+  function spawnResources(){
+    const cols = 69;
+    const rows = 53;
+    const spacing = 180;
+    let id = 0;
+
+    for(let r=0;r<rows;r++){
+      for(let c=0;c<cols;c++){
+        if(Math.random() < 0.6){
+          resources.push({
+            id: id++,
+            x: (c - r) * spacing,
+            y: (c + r) * spacing / 2
+          });
+        }
+      }
+    }
+  }
+  spawnResources();
+
+  /* ================= COMBAT ================= */
+  const ATTACK_RANGE = 80;
+  const DPS = 10; // damage per second
+
+  let targetPlayerSid = null;
+
+  let playerHealth = {};
+  const MAX_HEALTH = 100;
+
+  /* ================= SOCKET STATE ================= */
+  // Keep player positions/colors from state
+  // Update remote units
+
+  socket.on("state", (state) => {
+    console.log("STATE: before merge myUnits", myUnits.length,
+              "server me.units", state.players?.[mySid]?.units?.length);
+
+    if (state.ground_items) groundItems = state.ground_items;
+
+    // ✅ FIRST: sync my own units from server (adopt server ids)
+    const me = state.players?.[mySid];
+    if (me && Array.isArray(me.units)) {
+      myUnits = mergeUnitsPreserveFrames(myUnits, me.units);
+    }
+
+    for (const sid in players){
+            const first = players[sid].units[0];
+    if (first) { players[sid].x = first.x; players[sid].y = first.y; }
+    }
+
+
+    // existing: remove players no longer on server
+    for (const sid in players) {
+      if (!state.players[sid] || !state.players[sid].units || state.players[sid].units.length === 0) {
+        delete players[sid];
+      }
+    }
+
+    // ✅ sync other players as you already do (but using same merge helper)
+    for (const sid in state.players) {
+
+      if (sid === mySid) continue;
+      const sp = state.players[sid];
+
+      if (!sp.units || sp.units.length === 0) {
+        delete players[sid];
+        continue;
+      }
+
+      if (!players[sid]) players[sid] = { x: 0, y: 0, color: "#fff", units: [] };
+
+      players[sid].x = sp.x;
+      players[sid].y = sp.y;
+      players[sid].color = sp.color;
+
+      players[sid].units = mergeUnitsPreserveFrames(players[sid].units || [], sp.units);
+    }
+
+    // buildings...
+    buildings = state.buildings.map(sb => {
+      const existing = buildings.find(b => b.x === sb.x && b.y === sb.y && b.owner === sb.owner);
+      return {
+        ...sb,
+        selected: existing ? existing.selected : false,
+        queue: existing ? existing.queue : []
+      };
+    });
+
+    groundItems = state.ground_items || [];
   });
 
-  groundItems = state.ground_items || [];
-});
+      
 
-    
+  socket.on("unit_hp_update", ({ sid, unitId, hp }) => {
+      const list = sid === mySid ? myUnits : players[sid]?.units;
+      if (!list) return;
+      const u = list.find(u => u.id === unitId);
+      if (!u) return;
 
-socket.on("unit_hp_update", ({ sid, unitId, hp }) => {
-    const list = sid === mySid ? myUnits : players[sid]?.units;
-    if (!list) return;
-    const u = list.find(u => u.id === unitId);
+      u.hp = hp;
+
+      if (u.hp <= 0) {
+          // remove locally
+          const i = list.indexOf(u);
+          if (i !== -1) list.splice(i, 1);
+      }
+  });
+
+  socket.on("ground_items", (items) => {
+    groundItems = items || [];
+    // optional debug:
+    // console.log("ground_items update", groundItems.length);
+  });
+
+  socket.on("update_units", ({ sid, units }) => {
+    if (sid === mySid) return;
+
+    // ✅ if server says this player has no units, remove them immediately
+    if (!units || units.length === 0) {
+      delete players[sid];
+      return;
+    }
+
+    if (!players[sid]) players[sid] = { x:0, y:0, color:"#fff", units: [] };
+
+    players[sid].units = mergeUnitsPreserveFrames(players[sid].units || [], units);
+
+    // keep hover point synced
+    const first = players[sid].units[0];
+    if (first) {
+      players[sid].x = first.x;
+      players[sid].y = first.y;
+    }
+  });
+
+
+  let selectedUnits = []; // Array of selected unit IDs
+  let allUnits = {}; // sid -> units list (updated from server)
+
+  // Function to render selected units in panel
+  function renderUnitPanel() {
+      const unitListDiv = document.getElementById("unit-list");
+      unitListDiv.innerHTML = ""; // clear
+
+      selectedUnits.forEach(uid => {
+          let unit = findUnitById(uid);
+          if (!unit) return;
+
+          const unitDiv = document.createElement("div");
+          unitDiv.textContent = `Unit ${unit.id.slice(0,4)}`; // show short id
+          unitDiv.style.cursor = "pointer";
+          unitDiv.style.marginBottom = "5px";
+          unitDiv.style.padding = "2px 5px";
+          unitDiv.style.border = "1px solid white";
+          unitDiv.style.borderRadius = "4px";
+          unitDiv.addEventListener("click", () => {
+              renderUnitItems(unit);
+          });
+          unitListDiv.appendChild(unitDiv);
+      });
+  }
+
+  function findUnitById(uid) {
+      // Prefer local units (they definitely have items)
+      const local = myUnits.find(u => u.id === uid);
+      if (local) return local;
+
+      for (let sid in allUnits) {
+          const unit = (allUnits[sid] || []).find(u => u.id === uid);
+          if (unit) return unit;
+      }
+      return null;
+  }
+
+
+  socket.on("unit_slots_update", ({ unitId, itemSlots }) => {
+    const u = myUnits.find(x => x.id === unitId);
     if (!u) return;
 
-    u.hp = hp;
+    u.itemSlots = itemSlots;
 
-    if (u.hp <= 0) {
-        // remove locally
-        const i = list.indexOf(u);
-        if (i !== -1) list.splice(i, 1);
-    }
-});
-
-socket.on("ground_items", (items) => {
-  groundItems = items || [];
-  // optional debug:
-  // console.log("ground_items update", groundItems.length);
-});
-
-socket.on("update_units", ({ sid, units }) => {
-  if (sid === mySid) return;
-
-  // ✅ if server says this player has no units, remove them immediately
-  if (!units || units.length === 0) {
-    delete players[sid];
-    return;
-  }
-
-  if (!players[sid]) players[sid] = { x:0, y:0, color:"#fff", units: [] };
-
-  players[sid].units = mergeUnitsPreserveFrames(players[sid].units || [], units);
-
-  // keep hover point synced
-  const first = players[sid].units[0];
-  if (first) {
-    players[sid].x = first.x;
-    players[sid].y = first.y;
-  }
-});
-
-
-
-
-
-
-let selectedUnits = []; // Array of selected unit IDs
-let allUnits = {}; // sid -> units list (updated from server)
-
-// Function to render selected units in panel
-function renderUnitPanel() {
-    const unitListDiv = document.getElementById("unit-list");
-    unitListDiv.innerHTML = ""; // clear
-
-    selectedUnits.forEach(uid => {
-        let unit = findUnitById(uid);
-        if (!unit) return;
-
-        const unitDiv = document.createElement("div");
-        unitDiv.textContent = `Unit ${unit.id.slice(0,4)}`; // show short id
-        unitDiv.style.cursor = "pointer";
-        unitDiv.style.marginBottom = "5px";
-        unitDiv.style.padding = "2px 5px";
-        unitDiv.style.border = "1px solid white";
-        unitDiv.style.borderRadius = "4px";
-        unitDiv.addEventListener("click", () => {
-            renderUnitItems(unit);
-        });
-        unitListDiv.appendChild(unitDiv);
-    });
-}
-
-function findUnitById(uid) {
-    // Prefer local units (they definitely have items)
-    const local = myUnits.find(u => u.id === uid);
-    if (local) return local;
-
-    for (let sid in allUnits) {
-        const unit = (allUnits[sid] || []).find(u => u.id === uid);
-        if (unit) return unit;
-    }
-    return null;
-}
-
-
-
-
-
-
-function removeDeadUnits(unitsArray) {
-    for (let i = unitsArray.length - 1; i >= 0; i--) {
-        if (unitsArray[i].hp <= 0) {
-            unitsArray.splice(i, 1);
-        }
-    }
-}
-
-
-
-
-
-socket.on("unit_slots_update", ({ unitId, itemSlots }) => {
-  const u = myUnits.find(x => x.id === unitId);
-  if (!u) return;
-
-  u.itemSlots = itemSlots;
-
-  // refresh UI if currently showing this unit
-  if (currentItemsUnitId === unitId) renderUnitItems(u);
-});
-
-
-let editorMode = false;
-let mapObjects = []; // persistent objects from server
-
-const editorBtn = document.getElementById("editorBtn");
-const brushSelect = document.getElementById("brushSelect");
-
-brushSelect.addEventListener("change", () => {
-  const [type, kind] = brushSelect.value.split(":");
-  if (type !== "tile") return;
-
-  const def = TILE_DEFS[kind];
-  if (!def) return;
-
-  editorTileOverride = false; // back to file size defaults
-  editorTileW = def.w;
-  editorTileH = def.h;
-  editorTileAspect = editorTileH / editorTileW;
-});
-
-
-
-
-editorBtn.onclick = () => {
-  editorMode = !editorMode;
-  editorBtn.textContent = editorMode ? "Editor: ON" : "Editor: OFF";
-};
-
-socket.on("map_objects", (objs) => {
-  mapObjects = objs || [];
-});
-
-
-function drawEntityTitle(obj, sx, sy) {
-  if (!obj?.meta?.entity) return;
-
-  const title = (obj.meta.title && obj.meta.title.trim())
-    ? obj.meta.title
-    : getDefaultEntityTitle(obj);
-
-  ctx.fillStyle = "white";
-  ctx.font = "12px monospace";
-  ctx.textAlign = "center";
-  ctx.fillText(title, sx, sy - 40);
-}
-
-
-/* ================= UPDATE ================= */
-
-
-function update(){
-    if (!mySid) return;
-    if (!myUnits || myUnits.length === 0) return; // wait for server state
-    // --- CAMERA ---
-    if(keys.w) camera.y -= camSpeed;
-    if(keys.s) camera.y += camSpeed;
-    if(keys.a) camera.x -= camSpeed;
-    if(keys.d) camera.x += camSpeed;
-
-    const now = performance.now();
-
-
-    removeDeadUnits(myUnits);
-
-    for (const sid in players) {
-        if (sid === mySid) continue;
-        if (!players[sid] || !players[sid].units) continue;
-        removeDeadUnits(players[sid].units);
-    }
-
-
-    // --- UNIT LOGIC ---
-    for(let i = myUnits.length - 1; i >= 0; i--){
-        const u = myUnits[i];
-
-        if(u.hp <= 0){
-            myUnits.splice(i, 1);
-            continue;
-        }
-
-          // --- Manual move ---
-  if(u.manualMove){
-      const groupSize = myUnits.length;
-      const unitIndex = myUnits.indexOf(u);
-      const offset = getUnitTargetOffset(unitIndex, groupSize);
-
-      const targetX = u.tx + offset.dx;
-      const targetY = u.ty + offset.dy;
-
-      const dx = targetX - u.x;
-      const dy = targetY - u.y;
-      const dist = Math.hypot(dx, dy);
-      if(dist > 1.5){
-          const speed = 4.5;
-          u.x += (dx / dist) * Math.min(speed, dist);
-          u.y += (dy / dist) * Math.min(speed, dist);
-          u.anim = "walk";
-          u.dir = getDirKey(dx, dy);
-      
-      } else {
-          u.x = targetX; 
-          u.y = targetY; 
-          u.manualMove = false;
-          u.anim = "idle";
-          
-      }
-      advanceLocalAnim(u);
-      u.lastX = u.x;
-      u.lastY = u.y;
-      continue;
-  }
-
-
-     // --- Resource harvesting ---
-if (u.targetResource !== null) {
-  const r = resources.find(rr => rr.id === u.targetResource);
-  if (!r) {
-    u.targetResource = null;
-    u.harvesting = null;
-  } else {
-    const dx = r.x - u.x;
-    const dy = r.y - u.y;
-    const dist = Math.hypot(dx, dy);
-
-    if (dist > RESOURCE_STOP_RADIUS) {
-      const speed = 2.6;
-      u.x += (dx / dist) * Math.min(speed, dist);
-      u.y += (dy / dist) * Math.min(speed, dist);
-      u.anim = "walk";
-      u.dir = getDirKey(dx, dy);
-     
-    } else {
-      u.anim = "idle";
-  
-
-      // ✅ harvest check uses harvest radius
-      if (dist <= RESOURCE_HARVEST_RADIUS) {
-        if (!u.harvesting || u.harvesting.resourceId !== r.id) {
-          u.harvesting = { resourceId: r.id, startTime: now };
-        } else if (now - u.harvesting.startTime >= HARVEST_TIME) {
-          resources = resources.filter(rr => rr.id !== r.id);
-          resourceCount++;
-          u.harvesting = null;
-          u.targetResource = null;
-        }
-      }
-    }
-  }
-       advanceLocalAnim(u);
-      u.lastX = u.x;
-      u.lastY = u.y;
-  continue;
-}
-
-
-
-        // --- Combat & auto-chase ---
-        // --- Combat & auto-chase ---
-if (!u.manualMove) {
-
-  // validate current targetEnemy by unitId
-  if (u.targetEnemy) {
-    const enemyPlayer = players[u.targetEnemy.sid];
-    if (!enemyPlayer || !enemyPlayer.units || enemyPlayer.units.length === 0) {
-      u.targetEnemy = null;
-    } else {
-      const enemyUnit = enemyPlayer.units.find(eu => eu.id === u.targetEnemy.unitId);
-      if (!enemyUnit || (enemyUnit.hp ?? 0) <= 0) u.targetEnemy = null;
-    }
-  }
-
-  // acquire target if none
-  if (!u.targetEnemy) {
-    const nearest = findNearestEnemy(u);
-    if (nearest) {
-      const dist = Math.hypot(u.x - nearest.x, u.y - nearest.y);
-      if (dist <= 200) u.targetEnemy = nearest;
-    }
-  }
-
-  // engage target
-  if (u.targetEnemy) {
-    const enemyPlayer = players[u.targetEnemy.sid];
-    const enemy = enemyPlayer?.units?.find(eu => eu.id === u.targetEnemy.unitId);
-
-    if (!enemy || (enemy.hp ?? 0) <= 0) {
-      u.targetEnemy = null;
-    } else {
-      const dx = enemy.x - u.x;
-      const dy = enemy.y - u.y;
-      const dist = Math.hypot(dx, dy);
-
-      if (dist > UNIT_ATTACK_RANGE) {
-        const moveSpeed = 1.2;
-        u.x += (dx / dist) * moveSpeed;
-        u.y += (dy / dist) * moveSpeed;
-        u.anim = "walk";
-        u.dir = getDirKey(dx, dy);
-      } else {
-        u.anim = "attack";
-        if (u.attackCooldown >= ATTACK_COOLDOWN) {
-          console.log("ATTACK", u.id, "->", u.targetEnemy.sid, u.targetEnemy.unitId);
-          socket.emit("attack_unit", {
-            targetSid: u.targetEnemy.sid,
-            unitId: u.targetEnemy.unitId,
-            damage: UNIT_ATTACK_DPS / 60
-          });
-          u.attackCooldown = 0;
-        }
-      }
-    }
-  } else {
-    if (u.anim !== "idle") u.anim = "idle";
-  }
-}
-
-// --- Cooldowns ---
-if (u.attackCooldown < ATTACK_COOLDOWN) u.attackCooldown += 16.66;
-
-// ✅ ALWAYS advance animation frames based on current anim
-advanceLocalAnim(u);
-
-u.lastX = u.x;
-u.lastY = u.y;
-    }
-
-    if(DEBUG_COLLISIONS){
-        for(const u of myUnits){
-            applyCollisions(u); // only for drawing, don't push
-        }
-    }
-
-
-    // --- SEND STATE TO SERVER ---
-const unitStates = myUnits.map(u => ({
-    id: u.id,          // ⭐ REQUIRED
-    x: u.x,
-    y: u.y,
-    tx: u.tx,
-    ty: u.ty,
-    anim: u.anim,
-    dir: u.dir,
-    hp: u.hp
-}));
-    socket.emit("update_units", { units: unitStates });
-}
-
-
-
-
-
-
-
-
-function clamp01(v){ return Math.max(0, Math.min(1, v)); }
-
-function drawHarvestBars() {
-  const now = performance.now();
-
-  for (const u of myUnits) {
-    if (!u.harvesting) continue;
-
-    const r = resources.find(rr => rr.id === u.harvesting.resourceId);
-    if (!r) continue;
-
-    const t = clamp01((now - u.harvesting.startTime) / HARVEST_TIME);
-
-    const sx = canvas.width/2 + r.x - camera.x;
-    const sy = canvas.height/2 + r.y - camera.y;
-
-    const w = 46, h = 6;
-    const x = sx - w/2;
-    const y = sy - 34;
-
-    // background
-    ctx.fillStyle = "rgba(0,0,0,0.6)";
-    ctx.fillRect(x, y, w, h);
-
-    // fill
-    ctx.fillStyle = "rgba(0,255,0,0.85)";
-    ctx.fillRect(x, y, w * t, h);
-
-    // border
-    ctx.strokeStyle = "white";
-    ctx.lineWidth = 1;
-    ctx.strokeRect(x, y, w, h);
-  }
-}
-
-
-
-
-
-
-/*Outside update loop*/
-
-
-
-
-
-
-
-function renderYForWorld(obj) {
-  if (obj._type === "building") return obj.y + BUILD_H / 2;
-
-  if (obj._type === "tile") {
-    const defH = TILE_DEFS[obj.kind]?.h ?? 256;
-    const h = obj.meta?.h ?? defH;
-    return obj.y + h / 2;
-  }
-
-  if (obj._type === "tree") return obj.y;
-  if (obj._type === "resource") return obj.y;
-  if (obj._type === "ground") return obj.y;
-  return obj.y;
-}
-
-
-
-function renderYForUnit(u) {
-  return u.y + SPRITE_H/4; // feet-ish anchor
-}
-
-function mouseWorld() {
-  return {
-    x: camera.x + mouse.x - canvas.width / 2,
-    y: camera.y + mouse.y - canvas.height / 2
-  };
-}
-
-
-/* ================= BACKGROUND ================= */
-function drawBackground(){
-  const cx=canvas.width/2;
-  const cy=canvas.height/2;
-  const baseCol=Math.floor(camera.x/HALF_W);
-  const baseRow=Math.floor(camera.y/HALF_H);
-  const range=4;
-
-  for(let r=-range;r<=range;r++){
-    for(let c=-range;c<=range;c++){
-      const col=baseCol+c;
-      const row=baseRow+r;
-      const wx=(col-row)*HALF_W;
-      const wy=(col+row)*HALF_H;
-      ctx.drawImage(tile, cx+wx-camera.x, cy+wy-camera.y);
-    }
-  }
-}
-
-/* ================= DRAW ================= */
-const buildingImg = new Image();
-buildingImg.src = "static/building.png";
-const BUILD_W = 506;
-const BUILD_H = 370;
-
-// ===== EDITOR BRUSH DEFINITIONS (DYNAMIC) =====
-let TILE_DEFS = {};     // kind -> {src,w,h}
-let tileImages = {};    // kind -> Image
-
-// You can set defaults here (or extend later with per-tile sizes)
-const DEFAULT_TILE_W = 256;
-const DEFAULT_TILE_H = 256;
-
-let editorTileW = 256;
-let editorTileH = 256;
-let editorTileOverride = false; // true after user Shift+Scroll scales
-let editorTileAspect = 1;           // h / w (keeps ratio)
-editorTileAspect = editorTileH / editorTileW;
-
-const TILE_SCALE_STEP = 16;
-const TILE_SCALE_MIN = 16;
-const TILE_SCALE_MAX = 2048;
-
-function prettyName(stem) {
-  // "building2" -> "Building2", "dark_road" -> "Dark Road"
-  return stem
-    .replace(/[_-]+/g, " ")
-    .replace(/\b\w/g, c => c.toUpperCase());
-}
-
-function rebuildBrushSelect(tileNames) {
-  const brushSelect = document.getElementById("brushSelect");
-  if (!brushSelect) {
-    console.error("brushSelect not found in DOM (id='brushSelect').");
-    return;
-  }
-
-  // keep the first option (Building)
-  brushSelect.innerHTML = "";
-
-  for (const name of tileNames) {
-    const opt = document.createElement("option");
-    opt.value = `tile:${name}`;
-    opt.textContent = `Tile: ${prettyName(name)}`;
-    brushSelect.appendChild(opt);
-  }
-
-  if (tileNames.length === 0) {
-    const opt = document.createElement("option");
-    opt.disabled = true;
-    opt.textContent = "No tiles found in /static/tiles";
-    brushSelect.appendChild(opt);
-  }
-}
-
-async function loadTilesFromServer() {
-  const brushSelect = document.getElementById("brushSelect");
-  if (!brushSelect) {
-    console.error("brushSelect not found; delaying tile load until DOM exists.");
-    return;
-  }
-
-  try {
-    const res = await fetch("/tiles_manifest", { cache: "no-store" });
-    if (!res.ok) throw new Error(`tiles_manifest HTTP ${res.status}`);
-    const data = await res.json();
-
-    const tileNames = Array.isArray(data.tiles) ? data.tiles : [];
-
-    TILE_DEFS = {};
-    tileImages = {};
-
-for (const name of tileNames) {
-  const img = new Image();
-  img.src = `static/tiles/${name}.png`;
-
-  // set temporary defaults (will be replaced on load)
-  TILE_DEFS[name] = { src: img.src, w: DEFAULT_TILE_W, h: DEFAULT_TILE_H };
-  tileImages[name] = img;
-
-  const applySize = () => {
-    if (img.naturalWidth > 0 && img.naturalHeight > 0) {
-      TILE_DEFS[name].w = img.naturalWidth;
-      TILE_DEFS[name].h = img.naturalHeight;
-
-      // If this tile is currently selected, snap editor size to real file size
-      const bs = document.getElementById("brushSelect");
-if (bs && bs.value === `tile:${name}` && !editorTileOverride) {
-  editorTileW = TILE_DEFS[name].w;
-  editorTileH = TILE_DEFS[name].h;
-  editorTileAspect = editorTileH / editorTileW;
-}
-    }
-  };
-
-  // Works for both cached + freshly loaded images
-  if (img.complete) applySize();
-  else img.onload = applySize;
-}
-
-    rebuildBrushSelect(tileNames);
-  } catch (err) {
-    console.error("Failed to load tiles manifest:", err);
-
-    // fallback UI (safe)
-    brushSelect.innerHTML = "";
-    const optBuilding = document.createElement("option");
-    optBuilding.value = "building:building";
-    optBuilding.textContent = "Building";
-    brushSelect.appendChild(optBuilding);
-
-    const optFail = document.createElement("option");
-    optFail.disabled = true;
-    optFail.textContent = "Failed to load tiles";
-    brushSelect.appendChild(optFail);
-  }
-}
-
-
-window.addEventListener("DOMContentLoaded", () => {
-  loadTilesFromServer();
-});
-
-
-function draw() {
-  update();
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-  // Draw background
-  drawBackground();
-
-const worldRenderables = [];
-
-// Trees
-for (const t of trees) worldRenderables.push({ _type:"tree", x:t.x, y:t.y });
-
-// Resources
-for (const r of resources) worldRenderables.push({ _type:"resource", ...r });
-
-// Ground items
-for (const it of groundItems) worldRenderables.push({ _type:"ground", ...it });
-
-// Editor map objects
-for (const o of mapObjects) {
-  worldRenderables.push({
-    _type: o.type === "building" ? "building" : "tile",
-    ...o
+    // refresh UI if currently showing this unit
+    if (currentItemsUnitId === unitId) renderUnitItems(u);
   });
-}
-
-// RTS buildings array
-for (const b of buildings) worldRenderables.push({ _type:"building", ...b });
-
-// Sort bottom-last
-worldRenderables.sort((a,b) => {
-  const ay = renderYForWorld(a), by = renderYForWorld(b);
-  if (ay !== by) return ay - by;
-  return (a.x - b.x);
-});
-
-// Draw world (NO units here)
-for (const obj of worldRenderables) {
-  const sx = canvas.width/2 + obj.x - camera.x;
-  const sy = canvas.height/2 + obj.y - camera.y;
-
-  if (obj._type === "tree") {
-    ctx.drawImage(treeImg, sx - TREE_W/2, sy - TREE_H, TREE_W, TREE_H);
-    continue;
-  }
-
-  if (obj._type === "resource") {
-    ctx.drawImage(resourceImg, sx - RES_W/2, sy - RES_H/2, RES_W, RES_H);
-    continue;
-  }
-
-  if (obj._type === "ground") {
-    const icon = itemIcons[obj.name];
-    if (icon && icon.complete && icon.naturalWidth > 0) {
-      ctx.drawImage(icon, sx - GROUND_ITEM_SIZE/2, sy - GROUND_ITEM_SIZE/2, GROUND_ITEM_SIZE, GROUND_ITEM_SIZE);
-    }
-    continue;
-  }
-
-if (obj._type === "tile") {
-  const def = TILE_DEFS[obj.kind];
-  const img = tileImages[obj.kind];
-  if (!def) continue;
-
-const w = obj.meta?.w ?? def.w;
-const h = obj.meta?.h ?? def.h;
 
 
-  if (img && img.complete && img.naturalWidth > 0) {
-    ctx.drawImage(img, sx - w / 2, sy - h / 2, w, h);
-  }
+  let mapObjects = []; // persistent objects from server
 
-  // ✅ debug draw tile collision (rect centered on tile x,y)
-  if (DEBUG_COLLISIONS && obj.meta?.collides) {
-    ctx.strokeStyle = "rgba(0,255,255,0.4)";
-    ctx.lineWidth = 2;
-    ctx.setLineDash([6, 4]);
-    ctx.strokeRect(
-      sx - (obj.meta.cw ?? 0) / 2,
-      sy - (obj.meta.ch ?? 0) / 2,
-      (obj.meta.cw ?? 0),
-      (obj.meta.ch ?? 0)
-    );
-    ctx.setLineDash([]);
-  }
-  drawEntityTitle(obj, sx, sy);
-  continue;
-}
-
-
-  if (obj._type === "building") {
-    ctx.drawImage(buildingImg, sx - BUILD_W/2, sy - BUILD_H/2, BUILD_W, BUILD_H);
-
-    if (obj.selected) {
-      ctx.strokeStyle = "cyan";
-      ctx.lineWidth = 2;
-      ctx.setLineDash([5, 5]);
-      ctx.strokeRect(sx - BUILD_W/2, sy - BUILD_H/2, BUILD_W, BUILD_H);
-      ctx.setLineDash([]);
-    }
-    continue;
-  }
-}
-
-// ===== Editor placement preview (ghost) =====
-if (editorMode) {
-  const bs = document.getElementById("brushSelect");
-  if (bs && bs.value) {
-    const { x: wx, y: wy } = mouseWorld();
-    const sx = canvas.width / 2 + wx - camera.x;
-    const sy = canvas.height / 2 + wy - camera.y;
-
-    const [type, kind] = bs.value.split(":");
-
-    ctx.save();
-    ctx.globalAlpha = 0.55;
-
-    if (type === "building" && kind === "building") {
-      // building ghost
-      if (buildingImg && buildingImg.complete && buildingImg.naturalWidth > 0) {
-        ctx.drawImage(buildingImg, sx - BUILD_W / 2, sy - BUILD_H / 2, BUILD_W, BUILD_H);
-      } else {
-        ctx.strokeStyle = "white";
-        ctx.strokeRect(sx - BUILD_W / 2, sy - BUILD_H / 2, BUILD_W, BUILD_H);
-      }
-    } else if (type === "tile") {
-      const def = TILE_DEFS[kind];
-      const img = tileImages[kind];
-
-    const w = editorTileW;
-    const h = editorTileH;
-
-      if (img && img.complete && img.naturalWidth > 0) {
-        ctx.drawImage(img, sx - w / 2, sy - h / 2, w, h);
-      } else {
-        // fallback ghost box
-        ctx.strokeStyle = "white";
-        ctx.strokeRect(sx - w / 2, sy - h / 2, w, h);
-        ctx.fillStyle = "white";
-        ctx.font = "10px monospace";
-        ctx.textAlign = "center";
-        ctx.fillText(kind || "tile", sx, sy);
+  socket.on("map_objects", (objs) => {
+    mapObjects = objs || [];
+    // If entity inspector is open for an entity, refresh it immediately
+    if (selectedEntityId) {
+      const updated = mapObjects.find(x => x.id === selectedEntityId);
+      if (updated && entityPanelEl && entityPanelEl.style.display === "block") {
+        openEntityInspector(updated);
       }
     }
+  });
 
-    // extra outline so it’s readable
-    ctx.globalAlpha = 1;
-    ctx.setLineDash([4, 4]);
-    ctx.lineWidth = 2;
-
-    if (type === "building") {
-      ctx.strokeStyle = "cyan";
-      ctx.strokeRect(sx - BUILD_W / 2, sy - BUILD_H / 2, BUILD_W, BUILD_H);
-    } else if (type === "tile") {
-    const w = editorTileW;
-    const h = editorTileH;
-      ctx.strokeStyle = "lime";
-      ctx.strokeRect(sx - w / 2, sy - h / 2, w, h);
-    }
-
-    // draw collision preview
-if (type === "tile" && editorCollisionEnabled) {
-  ctx.save();
-  ctx.strokeStyle = "rgba(0,255,255,0.9)";
-  ctx.setLineDash([6, 4]);
-  ctx.lineWidth = 2;
-  ctx.strokeRect(
-    sx - editorCollisionW / 2,
-    sy - editorCollisionH / 2,
-    editorCollisionW,
-    editorCollisionH
-  );
-  ctx.restore();
-}
-
-
-if (type === "tile" && !editorCollisionEnabled) {
-  ctx.fillStyle = "rgba(255,0,0,0.6)";
-  ctx.font = "12px monospace";
-  ctx.textAlign = "center";
-  ctx.fillText("NO COLLISION", sx, sy - 40);
-}
-
-
-    ctx.restore();
-  }
-}
-
-
-
-const unitRenderables = [];
-
-// my units (reference)
-for (const u of myUnits) unitRenderables.push({ owner: mySid, ref: u });
-
-// other players units (reference)
-for (const sid in players) {
-  if (sid === mySid) continue;
-  for (const u of (players[sid].units || [])) {
-    unitRenderables.push({ owner: sid, ref: u });
-  }
-}
-
-unitRenderables.sort((a,b) => renderYForUnit(a.ref) - renderYForUnit(b.ref));
-
-for (const item of unitRenderables) {
-  const u = item.ref;
-  const isMine = (item.owner === mySid);
-
-  const sx = canvas.width/2 + u.x - camera.x;
-  const sy = canvas.height/2 + u.y - camera.y;
-
-  let frames, framesShadow, frameIndex;
-
-  if (!isMine) {
-    if (u.anim === "attack") {
-      frames = playerSprites.attack[u.dir];
-      framesShadow = playerSprites.attackshadow[u.dir];
-      u.renderAttackFrame = (u.renderAttackFrame ?? 0) + ANIM_SPEED;
-      if (u.renderAttackFrame >= ATTACK_ANIM_FRAMES) u.renderAttackFrame = 0;
-      frameIndex = Math.floor(u.renderAttackFrame);
-    } else if (u.anim === "walk") {
-      frames = playerSprites.walk[u.dir];
-      framesShadow = playerSprites.walkshadow[u.dir];
-      u.renderFrame = (u.renderFrame ?? 0) + ANIM_SPEED;
-      if (u.renderFrame >= WALK_FRAMES) u.renderFrame = 0;
-      frameIndex = Math.floor(u.renderFrame);
-    } else {
-      frames = playerSprites.idle[u.dir];
-      framesShadow = playerSprites.idleshadow[u.dir];
-      u.renderFrame = (u.renderFrame ?? 0) + ANIM_SPEED;
-      if (u.renderFrame >= IDLE_FRAMES) u.renderFrame = 0;
-      frameIndex = Math.floor(u.renderFrame);
-    }
-  } else {
-    if (u.anim === "attack") {
-      frames = playerSprites.attack[u.dir];
-      framesShadow = playerSprites.attackshadow[u.dir];
-      frameIndex = Math.floor(u.attackFrame || 0);
-    } else if (u.anim === "walk") {
-      frames = playerSprites.walk[u.dir];
-      framesShadow = playerSprites.walkshadow[u.dir];
-      frameIndex = Math.floor(u.frame || 0);
-    } else {
-      frames = playerSprites.idle[u.dir];
-      framesShadow = playerSprites.idleshadow[u.dir];
-      frameIndex = Math.floor(u.frame || 0);
-    }
-  }
-
-  const img = frames?.[frameIndex];
-  const sh  = framesShadow?.[frameIndex];
-
-  if (sh && sh.complete) ctx.drawImage(sh, sx - SPRITE_W/2, sy - SPRITE_H/2, SPRITE_W, SPRITE_H);
-  if (img && img.complete) ctx.drawImage(img, sx - SPRITE_W/2, sy - SPRITE_H/2, SPRITE_W, SPRITE_H);
-
-  // HP bar
-  ctx.fillStyle = "red";
-  ctx.fillRect(sx - 20, sy - 30, 40, 5);
-  ctx.fillStyle = "green";
-  ctx.fillRect(sx - 20, sy - 30, 40 * ((u.hp ?? 100) / 100), 5);
-
-  // selection ring
-  if (isMine && u.selected) {
-    ctx.strokeStyle = "yellow";
-    ctx.beginPath();
-    ctx.arc(sx, sy + SPRITE_H/4, 18, 0, Math.PI*2);
-    ctx.stroke();
-  }
-}
-
-
-
-
-
-
-
-  // Hover outlines
-  if (hoveredResource) {
-    const x = canvas.width / 2 + hoveredResource.x - camera.x;
-    const y = canvas.height / 2 + hoveredResource.y - camera.y;
-
-    ctx.strokeStyle = "yellow";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(x, y, RESOURCE_RADIUS, 0, Math.PI * 2);
-    ctx.stroke();
-  }
-
-  if (hoveredPlayerSid && players[hoveredPlayerSid]) {
-    const p = players[hoveredPlayerSid];
-    const x = canvas.width / 2 + p.x - camera.x;
-    const y = canvas.height / 2 + p.y - camera.y;
-
-    ctx.strokeStyle = "red";
-    ctx.lineWidth = 2;
-    ctx.setLineDash([4, 4]);
-    ctx.beginPath();
-    ctx.rect(x - 14, y - 14, 28, 28);
-    ctx.stroke();
-    ctx.setLineDash([]);
-  }
-
-
-  drawHarvestBars();
-
-
-
-
-
-  // Building placement preview
-  if (buildMode) {
-    ctx.globalAlpha = 0.5;
-    const wx = camera.x + mouse.x - canvas.width / 2;
-    const wy = camera.y + mouse.y - canvas.height / 2;
-    const bx = canvas.width / 2 + wx - camera.x;
-    const by = canvas.height / 2 + wy - camera.y;
-    ctx.drawImage(buildingImg, bx - BUILD_W / 2, by - BUILD_H / 2, BUILD_W, BUILD_H);
-    ctx.globalAlpha = 1;
-  }
-
-  // Selection box
-  if (selecting) {
-    ctx.strokeStyle = "white";
-    ctx.setLineDash([5, 5]);
-    ctx.strokeRect(selectStart.x, selectStart.y, mouse.x - selectStart.x, mouse.y - selectStart.y);
-    ctx.setLineDash([]);
-  }
-
-  // Panels logic
-  const selectedBuilding = buildings.find(b => b.selected);
-  const selectedUnits = myUnits.filter(u => u.selected);
-
-  if (selectedBuilding) {
-    buildingPanel.style.display = "block";
-    panel.style.display = "none";
-  } else if (selectedUnits.length > 0) {
-    panel.style.display = "block";
-    buildingPanel.style.display = "none";
-  } else {
-    panel.style.display = "none";
-    buildingPanel.style.display = "none";
-  }
-
-
-
-// pick a "current unit" for pickup distance checks: first selected local unit
-const picker = myUnits.find(u => u.selected) || null;
-
-const visibleItems = groundItems.slice().sort((a,b)=>a.y-b.y);
-for (const it of visibleItems) {
-  const sx = canvas.width/2 + it.x - camera.x;
-  const sy = canvas.height/2 + it.y - camera.y;
-
-  // icon / fallback
-  const icon = itemIcons[it.name];
-  if (icon && icon.complete && icon.naturalWidth > 0) {
-    ctx.drawImage(icon, sx - GROUND_ITEM_SIZE/2, sy - GROUND_ITEM_SIZE/2, GROUND_ITEM_SIZE, GROUND_ITEM_SIZE);
-  } else {
-    ctx.fillStyle = "rgba(255,255,255,0.15)";
-    ctx.beginPath();
-    ctx.arc(sx, sy, 14, 0, Math.PI*2);
-    ctx.fill();
-    ctx.strokeStyle = "white";
-    ctx.stroke();
-  }
-
-  // name above item (always)
-  ctx.fillStyle = "white";
-  ctx.font = "12px monospace";
-  ctx.textAlign = "center";
-  ctx.fillText(it.name, sx, sy - 22);
-
-  // show pickup range indicator if a selected unit is near enough
-  if (picker && unitCanPickup(picker, it)) {
-    ctx.strokeStyle = "lime";
-    ctx.beginPath();
-    ctx.arc(sx, sy, 18, 0, Math.PI*2);
-    ctx.stroke();
-  }
-}
-
-  if (draggingPickup) {
-    const gi = groundItems.find(x => x.id === draggingPickup.groundItemId);
-    if (gi) {
-      const icon = itemIcons[gi.name];
-      const mx = dragMouse.x;
-      const my = dragMouse.y;
-
-      ctx.globalAlpha = 0.85;
-      if (icon && icon.complete && icon.naturalWidth > 0) {
-        ctx.drawImage(icon, mx - 16, my - 16, 32, 32);
-      } else {
-        ctx.fillStyle = "rgba(255,255,255,0.2)";
-        ctx.beginPath();
-        ctx.arc(mx, my, 14, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.strokeStyle = "white";
-        ctx.stroke();
-        ctx.fillStyle = "white";
-        ctx.font = "10px monospace";
-        ctx.textAlign = "center";
-        ctx.fillText(gi.name, mx, my - 18);
-      }
-      ctx.globalAlpha = 1;
-    }
-  }
-
-
-
-
-  // HUD update (safe use of selectedUnits)
-hud.innerText = `Camera: ${camera.x|0}, ${camera.y|0}
-Resources: ${resourceCount}
-Selected: ${selectedUnits.length}
-TileSize: ${editorTileW}x${editorTileH}  Collision: ${editorCollisionEnabled ? `${editorCollisionW}x${editorCollisionH}` : "OFF"}`;
-
-
-  requestAnimationFrame(draw);
-}
-
-
-
-tile.onload = draw;
-</script>
-</body>
-</html>
+  tile.onload = draw;
+  </script>
+  </body>
+  </html>

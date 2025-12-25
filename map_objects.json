@@ -491,20 +491,6 @@
     }
   },
   {
-    "id": "eee3f858-5e08-4ce9-9bc6-d3181f9596bb",
-    "type": "tile",
-    "kind": "road",
-    "x": 172.0,
-    "y": -82.5,
-    "meta": {
-      "collides": false,
-      "cw": 64,
-      "ch": 64,
-      "w": 573,
-      "h": 358
-    }
-  },
-  {
     "id": "29d7d95b-3c66-4e10-bf52-783b8460e757",
     "type": "tile",
     "kind": "barrels_N",
@@ -534,6 +520,49 @@
       "title": "Chest",
       "bio": "",
       "actions": []
-    }
+    },
+    "itemSlots": [
+      null
+    ]
+  },
+  {
+    "id": "dd33f71d-7557-453c-b1ee-f8145ceb05b9",
+    "type": "tile",
+    "kind": "town_center",
+    "x": -547.0,
+    "y": -175.5,
+    "meta": {
+      "entity": true,
+      "title": "Building",
+      "bio": "",
+      "actions": [],
+      "collides": true,
+      "cw": 256,
+      "ch": 256,
+      "w": 256,
+      "h": 256
+    },
+    "owner": "OX6SsSkw2cspPu3SAAAJ",
+    "itemSlots": []
+  },
+  {
+    "id": "dcd065a2-0777-4e61-9a5b-ee4d2590e9c5",
+    "type": "tile",
+    "kind": "town_center",
+    "x": -462.0,
+    "y": 157.5,
+    "meta": {
+      "entity": true,
+      "title": "Building",
+      "bio": "",
+      "actions": [],
+      "collides": true,
+      "cw": 256,
+      "ch": 256,
+      "w": 256,
+      "h": 256
+    },
+    "owner": "z4lKFg8ogYr-OY2rAAAD",
+    "itemSlots": []
   }
 ]

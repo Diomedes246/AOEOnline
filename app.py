@@ -11,6 +11,9 @@ from pathlib import Path
 MAP_FILE = "map_objects.json"
 map_lock = Lock()
 
+GROUND_FILE = "ground_items.json"
+ground_lock = Lock()
+
 # Each object: {id, type, kind, x, y, owner, rot, meta}
 map_objects = []
 
@@ -22,11 +25,25 @@ def load_map():
     else:
         map_objects = []
 
+def load_ground():
+    global ground_items
+    if os.path.exists(GROUND_FILE):
+        with open(GROUND_FILE, "r", encoding="utf-8") as f:
+            ground_items[:] = json.load(f)
+    else:
+        ground_items.clear()
+
 def save_map():
     tmp = MAP_FILE + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(map_objects, f, ensure_ascii=False, indent=2)
     os.replace(tmp, MAP_FILE)
+
+def save_ground():
+    tmp = GROUND_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(ground_items, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, GROUND_FILE)
 
 load_map()
 
@@ -42,6 +59,8 @@ buildings = []   # list of {x, y, owner}
 
 ground_items = []  # [{id, name, x, y}]
 PICKUP_DISTANCE = 120
+
+load_ground()
 
 def find_unit(sid, unit_id):
     p = players.get(sid)
@@ -164,7 +183,11 @@ def place_map_object(data):
             "kind": data.get("kind"),
             "x": float(data.get("x", 0)),
             "y": float(data.get("y", 0)),
-            "meta": data.get("meta") or {}
+            "meta": data.get("meta") or {},
+            # owner: prefer client-provided, otherwise server-assign to the creator
+            "owner": data.get("owner") or request.sid,
+            # optional itemSlots for persistent entity items
+            "itemSlots": data.get("itemSlots") or []
         }
         map_objects.append(obj)
         save_map()
@@ -175,12 +198,16 @@ def place_map_object(data):
 def update_map_object(data):
     oid = data.get("id")
     meta = data.get("meta") or {}
+    itemSlots = data.get("itemSlots")
 
     with map_lock:
         changed = False
         for o in map_objects:
             if o.get("id") == oid:
                 o["meta"] = {**(o.get("meta") or {}), **meta}  # merge
+                # update persistent itemSlots if provided
+                if itemSlots is not None:
+                    o["itemSlots"] = itemSlots
                 changed = True
                 break
         if changed:
@@ -282,6 +309,76 @@ def spawn_unit(data):
     socketio.emit("update_units", {"sid": sid, "units": players[sid]["units"]})
 
 
+@socketio.on("spawn_unit_from_entity")
+def spawn_unit_from_entity(data):
+    sid = request.sid
+    entity_id = data.get("entityId")
+    if not entity_id:
+        return
+
+    # find entity
+    with map_lock:
+        ent = next((m for m in map_objects if m.get("id") == entity_id), None)
+        if not ent:
+            return
+
+        # Only allow town_center to spawn units
+        kind = ent.get("kind")
+        if kind != "town_center":
+            return
+
+        # Only allow owner of the town_center to spawn units
+        owner = ent.get("owner")
+        if owner != sid:
+            print(f"[spawn_unit_from_entity] unauthorized: sid={sid} owner={owner} entity={entity_id}", flush=True)
+            socketio.emit("server_debug", {"msg": "spawn_unit_from_entity: you do not own that town center"}, to=sid)
+            return
+
+        # spawn position: offset from entity
+        ex = float(ent.get("x", 0))
+        ey = float(ent.get("y", 0))
+
+    # Create unit for requesting player
+    p = players.get(sid)
+    if not p:
+        return
+
+    # Enforce population limit per town_center (max 10 active units spawned from this entity)
+    current_spawned = 0
+    for pp in players.values():
+        for uu in pp.get("units", []):
+            if uu.get("spawnedFrom") == entity_id:
+                current_spawned += 1
+    POP_LIMIT = 10
+    if current_spawned >= POP_LIMIT:
+        print(f"[spawn_unit_from_entity] population limit reached for {entity_id}: {current_spawned}", flush=True)
+        socketio.emit("server_debug", {"msg": f"spawn_unit_from_entity: population limit ({POP_LIMIT}) reached for this town center"}, to=sid)
+        return
+
+    # generate spawn offset to avoid stacking
+    ox = random.randint(-60, 60)
+    oy = random.randint(-40, 40)
+
+    new_unit = {
+        "id": str(uuid.uuid4()),
+        "x": ex + ox,
+        "y": ey + oy,
+        "tx": ex + ox,
+        "ty": ey + oy,
+        "hp": 100,
+        "anim": "idle",
+        "dir": "000",
+        "itemSlots": make_default_slots(),
+        "spawnedFrom": entity_id
+    }
+
+    p.setdefault("units", []).append(new_unit)
+
+    # notify owner and all clients
+    socketio.emit("update_units", {"sid": sid, "units": p["units"]})
+    emit_state()
+
+
 @socketio.on("drop_item")
 def on_drop_item(data):
     global ground_items
@@ -322,6 +419,10 @@ def on_drop_item(data):
 
     # everyone sees it
     socketio.emit("ground_items", ground_items)
+
+    # persist ground items
+    with ground_lock:
+        save_ground()
 
     # only the owner needs equipment UI refresh
     socketio.emit("unit_slots_update", {"unitId": unit_id, "itemSlots": slots}, to=sid)
@@ -366,6 +467,10 @@ def on_pickup_item(data):
     # ✅ remove from ground IN-PLACE (no reassignment issues)
     ground_items.pop(gi_index)
 
+    # persist ground items
+    with ground_lock:
+        save_ground()
+
     # equip
     slots[slot_index] = {
         "id": str(uuid.uuid4()),
@@ -378,6 +483,10 @@ def on_pickup_item(data):
 
     # ✅ owner gets equipment refresh
     socketio.emit("unit_slots_update", {"unitId": unit_id, "itemSlots": slots}, to=sid)
+
+    # persist ground items
+    with ground_lock:
+        save_ground()
 
     # ✅ optional but recommended: hard-sync state so late-joiners / state-only clients match
     emit_state()
@@ -473,6 +582,172 @@ def place_building(data):
     sid = request.sid
     buildings.append({"x": data["x"], "y": data["y"], "owner": sid})
     emit_state()
+
+
+@socketio.on("unit_give_to_entity")
+def handle_unit_give_to_entity(data):
+    sid = request.sid
+    print(f"[unit_give_to_entity] called by sid={sid} data={data}", flush=True)
+    unit_id = data.get("unitId")
+    unit_slot_index = int(data.get("unitSlotIndex", -1))
+    entity_id = data.get("entityId")
+    entity_slot_index = int(data.get("entitySlotIndex", -1))
+
+    if not unit_id or unit_slot_index < 0 or not entity_id or entity_slot_index < 0:
+        print(f"[unit_give_to_entity] invalid args: unit_id={unit_id} unit_slot_index={unit_slot_index} entity_id={entity_id} entity_slot_index={entity_slot_index}", flush=True)
+        socketio.emit("server_debug", {"msg": "unit_give_to_entity: invalid args"}, to=sid)
+        return
+
+    u = find_unit(sid, unit_id)
+    if not u:
+        print(f"[unit_give_to_entity] unit not found for sid={sid} unit_id={unit_id}", flush=True)
+        socketio.emit("server_debug", {"msg": "unit_give_to_entity: unit not found or not owned by you"}, to=sid)
+        return
+
+    slots = u.get("itemSlots") or [None, None]
+    if unit_slot_index >= len(slots):
+        print(f"[unit_give_to_entity] unit_slot_index out of range: {unit_slot_index} >= {len(slots)}", flush=True)
+        socketio.emit("server_debug", {"msg": "unit_give_to_entity: slot index out of range"}, to=sid)
+        return
+    item = slots[unit_slot_index]
+    if not item:
+        print(f"[unit_give_to_entity] no item in unit slot {unit_slot_index}", flush=True)
+        socketio.emit("server_debug", {"msg": "unit_give_to_entity: no item in that slot"}, to=sid)
+        return
+
+    # find entity
+    with map_lock:
+        ent = next((m for m in map_objects if m.get("id") == entity_id), None)
+        if not ent:
+            print(f"[unit_give_to_entity] entity not found: {entity_id}", flush=True)
+            socketio.emit("server_debug", {"msg": "unit_give_to_entity: entity not found"}, to=sid)
+            return
+        eslots = ent.get("itemSlots") or []
+        # expand if needed
+        if entity_slot_index >= len(eslots):
+            eslots += [None] * (entity_slot_index + 1 - len(eslots))
+        if eslots[entity_slot_index] is not None:
+            print(f"[unit_give_to_entity] entity slot occupied: {entity_slot_index}", flush=True)
+            socketio.emit("server_debug", {"msg": "unit_give_to_entity: entity slot already occupied"}, to=sid)
+            return
+        # transfer
+        eslots[entity_slot_index] = item
+        ent["itemSlots"] = eslots
+        # remove from unit
+        slots[unit_slot_index] = None
+        u["itemSlots"] = slots
+        save_map()
+
+    print(f"[unit_give_to_entity] transfer success: unit {unit_id} slot {unit_slot_index} -> entity {entity_id} slot {entity_slot_index}", flush=True)
+    socketio.emit("server_debug", {"msg": "unit_give_to_entity: transfer success"}, to=sid)
+
+    # notify clients
+    socketio.emit("map_objects", map_objects)
+    socketio.emit("unit_slots_update", {"unitId": unit_id, "itemSlots": slots}, to=sid)
+
+
+@socketio.on("ground_give_to_entity")
+def handle_ground_give_to_entity(data):
+    sid = request.sid
+    print(f"[ground_give_to_entity] called by sid={sid} data={data}", flush=True)
+    entity_id = data.get("entityId")
+    try:
+        entity_slot_index = int(data.get("entitySlotIndex", -1))
+    except Exception:
+        entity_slot_index = -1
+    ground_id = data.get("groundItemId")
+
+    if not entity_id or entity_slot_index < 0 or not ground_id:
+        print(f"[ground_give_to_entity] invalid args: entity_id={entity_id} slot={entity_slot_index} ground_id={ground_id}", flush=True)
+        socketio.emit("server_debug", {"msg": "ground_give_to_entity: invalid args"}, to=sid)
+        return
+
+    # find ground item
+    gi_index = next((i for i, g in enumerate(ground_items) if g.get("id") == ground_id), None)
+    if gi_index is None:
+        print(f"[ground_give_to_entity] ground item not found: {ground_id}", flush=True)
+        socketio.emit("server_debug", {"msg": "ground_give_to_entity: ground item not found"}, to=sid)
+        return
+
+    gi = ground_items[gi_index]
+
+    # find entity and transfer
+    with map_lock:
+        ent = next((m for m in map_objects if m.get("id") == entity_id), None)
+        if not ent:
+            print(f"[ground_give_to_entity] entity not found: {entity_id}", flush=True)
+            socketio.emit("server_debug", {"msg": "ground_give_to_entity: entity not found"}, to=sid)
+            return
+
+        eslots = ent.get("itemSlots") or []
+        if entity_slot_index >= len(eslots):
+            eslots += [None] * (entity_slot_index + 1 - len(eslots))
+        if eslots[entity_slot_index] is not None:
+            print(f"[ground_give_to_entity] entity slot occupied: {entity_slot_index}", flush=True)
+            socketio.emit("server_debug", {"msg": "ground_give_to_entity: entity slot occupied"}, to=sid)
+            return
+
+        # transfer ground item into entity slot
+        eslots[entity_slot_index] = {"id": str(uuid.uuid4()), "name": gi.get("name")}
+        ent["itemSlots"] = eslots
+
+    # remove ground item
+    ground_items.pop(gi_index)
+
+    # persist changes
+    with ground_lock:
+        save_ground()
+    with map_lock:
+        save_map()
+
+    print(f"[ground_give_to_entity] success: ground {ground_id} -> entity {entity_id} slot {entity_slot_index}", flush=True)
+    socketio.emit("server_debug", {"msg": "ground_give_to_entity: transfer success"}, to=sid)
+
+    # notify clients
+    socketio.emit("map_objects", map_objects)
+    socketio.emit("ground_items", ground_items)
+
+
+@socketio.on("entity_give_to_unit")
+def handle_entity_give_to_unit(data):
+    sid = request.sid
+    entity_id = data.get("entityId")
+    entity_slot_index = int(data.get("entitySlotIndex", -1))
+    unit_id = data.get("unitId")
+    unit_slot_index = int(data.get("slotIndex", -1))
+
+    if not unit_id or unit_slot_index < 0 or not entity_id or entity_slot_index < 0:
+        return
+
+    p = players.get(sid)
+    if not p: return
+
+    u = find_unit(sid, unit_id)
+    if not u: return
+
+    with map_lock:
+        ent = next((m for m in map_objects if m.get("id") == entity_id), None)
+        if not ent: return
+        eslots = ent.get("itemSlots") or []
+        if entity_slot_index >= len(eslots): return
+        item = eslots[entity_slot_index]
+        if not item: return
+        # distance check
+        # NOTE: allow transfers to entities regardless of distance (no drop radius)
+        # make sure unit slot empty
+        uslots = u.get("itemSlots") or [None, None]
+        if unit_slot_index >= len(uslots): return
+        if uslots[unit_slot_index] is not None: return
+        # transfer
+        uslots[unit_slot_index] = {"id": str(uuid.uuid4()), "name": item.get("name")}
+        u["itemSlots"] = uslots
+        eslots[entity_slot_index] = None
+        ent["itemSlots"] = eslots
+        save_map()
+
+    # notify clients
+    socketio.emit("map_objects", map_objects)
+    socketio.emit("unit_slots_update", {"unitId": unit_id, "itemSlots": uslots}, to=sid)
 
 # Run server
 if __name__ == "__main__":
