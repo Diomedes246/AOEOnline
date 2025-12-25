@@ -11,6 +11,10 @@ from pathlib import Path
 MAP_FILE = "map_objects.json"
 map_lock = Lock()
 
+# Background task guard to ensure mine loop starts exactly once
+mine_loop_started = False
+mine_loop_lock = Lock()
+
 # Cost constants
 TOWN_CENTER_COST = 5
 
@@ -33,19 +37,40 @@ def load_map():
             map_objects = json.load(f)
     else:
         map_objects = []
-    # Ensure only building-type entities have HP; other entities are invulnerable by default
+    
+    # Reset nextTick for any mines that were loaded from file
+    # (their old nextTick is likely in the past)
+    now = time.time()
     for o in map_objects:
-        if o.get("meta", {}).get("entity") and (o.get("type") == "building" or o.get("kind") == "town_center"):
-            if o.get("hp") is None:
-                # default HP for town_center vs generic building
-                if o.get("kind") == "town_center":
-                    o["hp"] = 500
-                else:
-                    o["hp"] = 200
-        else:
-            # remove hp for non-building entities to make them invulnerable
-            if "hp" in o:
-                del o["hp"]
+        if o.get("kind") == "mine" and o.get("meta"):
+            m = o["meta"]
+            # Normalize legacy mines so the production loop will process them
+            if not m.get("entity"):
+                m["entity"] = True
+            mine_meta = m.setdefault("mine", {})
+            mine_meta.setdefault("resource", "red")
+            interval = int(m.get("interval", 30))
+            m["interval"] = interval
+            m["nextTick"] = now + interval
+            print(f"[LOAD_MAP] Reset mine {o.get('id')} nextTick to {m['nextTick']} interval={interval}", flush=True)
+    
+    # Ensure entities that need HP bars have them set
+    for o in map_objects:
+        if o.get("meta", {}).get("entity"):
+            # town_center, building, and mine all need HP bars
+            if o.get("kind") in ("town_center", "building", "mine"):
+                if o.get("hp") is None:
+                    # default HP by kind
+                    if o.get("kind") == "town_center":
+                        o["hp"] = 500
+                    elif o.get("kind") == "mine":
+                        o["hp"] = 300
+                    else:
+                        o["hp"] = 200
+            else:
+                # other entities are invulnerable by default
+                if "hp" in o:
+                    del o["hp"]
 
 def load_ground():
     global ground_items
@@ -83,6 +108,17 @@ def save_ground():
         json.dump(ground_items, f, ensure_ascii=False, indent=2)
     os.replace(tmp, GROUND_FILE)
 
+
+def ensure_mine_loop_started():
+    """Start the mine production loop exactly once across any run mode."""
+    global mine_loop_started
+    with mine_loop_lock:
+        if mine_loop_started:
+            return
+        socketio.start_background_task(mine_production_loop)
+        mine_loop_started = True
+        print("[MINE_LOOP] Background task started", flush=True)
+
 load_map()
 load_resources()
 
@@ -116,7 +152,10 @@ def dist_xy(x1, y1, x2, y2):
 def make_default_slots():
     return [
         {"id": str(uuid.uuid4()), "name": "sword"},
-        {"id": str(uuid.uuid4()), "name": "shield"}
+        {"id": str(uuid.uuid4()), "name": "shield"},
+        None,
+        None,
+        None
     ]
 
 # Add global state for trees
@@ -174,7 +213,6 @@ def emit_state(to_sid=None):
         "ground_items": ground_items,
         "map_objects": map_objects,
         "resources": resources
-
     }
     if to_sid:
         socketio.emit("state", state, to=to_sid)
@@ -228,6 +266,29 @@ def place_map_object(data):
         # deduct cost from red resource
         player.setdefault("resources", {"red":0,"green":0,"blue":0})
         player["resources"]["red"] = max(0, player["resources"].get("red", 0) - TOWN_CENTER_COST)
+    
+    if kind == "mine":
+        player = players.get(sid)
+        mine_cost = 3
+        # check blue resource
+        if not player or player.get("resources", {}).get("blue", 0) < mine_cost:
+            socketio.emit("server_debug", {"msg": f"Not enough blue resources to build Mine (requires {mine_cost})"}, to=sid)
+            return
+        # deduct cost from blue resource
+        player.setdefault("resources", {"red":0,"green":0,"blue":0})
+        player["resources"]["blue"] = max(0, player["resources"].get("blue", 0) - mine_cost)
+        
+        # Ensure player exists in players dict for mine production to work
+        # Must include units array so client doesn't delete them for having no units
+        if sid not in players:
+            print(f"[MINE_PLACE] Creating player entry for {sid[:8]} (placing mine)", flush=True)
+            players[sid] = {
+                "resources": {"red": 0, "green": 0, "blue": 0},
+                "units": [],
+                "x": 0,
+                "y": 0,
+                "color": "#fff"
+            }
 
     with map_lock:
         obj = {
@@ -242,12 +303,25 @@ def place_map_object(data):
             # optional itemSlots for persistent entity items
             "itemSlots": data.get("itemSlots") or []
         }
+        # Initialize mine production meta
+        if obj.get("kind") == "mine":
+            m = obj.setdefault("meta", {})
+            m["entity"] = True  # Mark as entity so production loop processes it
+            mine_meta = m.setdefault("mine", {})
+            mine_meta.setdefault("resource", "red")
+            m.setdefault("interval", 30)
+            m.setdefault("nextTick", time.time() + int(m.get("interval", 30)))
         # If this is a building entity, ensure it has HP; other entities are invulnerable by default
-        if obj.get("meta", {}).get("entity") and (obj.get("type") == "building" or obj.get("kind") == "town_center"):
+        if obj.get("meta", {}).get("entity") and (obj.get("type") == "building" or obj.get("kind") in ["town_center", "mine"]):
             if data.get("hp") is not None:
                 obj["hp"] = float(data.get("hp"))
             else:
-                obj["hp"] = 500 if obj.get("kind") == "town_center" else 200
+                if obj.get("kind") == "town_center":
+                    obj["hp"] = 500
+                elif obj.get("kind") == "mine":
+                    obj["hp"] = 300
+                else:
+                    obj["hp"] = 200
         map_objects.append(obj)
         save_map()
 
@@ -260,11 +334,20 @@ def update_map_object(data):
     oid = data.get("id")
     meta = data.get("meta") or {}
     itemSlots = data.get("itemSlots")
+    sid = request.sid
 
     with map_lock:
         changed = False
         for o in map_objects:
             if o.get("id") == oid:
+                # Only the owner may change a mine's resource type
+                try:
+                    new_mine_resource = meta.get("mine", {}).get("resource")
+                except Exception:
+                    new_mine_resource = None
+                if new_mine_resource is not None and o.get("kind") == "mine" and o.get("owner") and o.get("owner") != sid:
+                    socketio.emit("server_debug", {"msg": "update_map_object: only the owner can change mine resource"}, to=sid)
+                    break
                 o["meta"] = {**(o.get("meta") or {}), **meta}  # merge
                 # update persistent itemSlots if provided
                 if itemSlots is not None:
@@ -296,9 +379,26 @@ def delete_map_object(data):
 
     socketio.emit("map_objects", map_objects)
 
+
+@socketio.on("delete_ground_item")
+def delete_ground_item(data):
+    gid = data.get("id")
+    if not gid:
+        return
+
+    global ground_items
+    with ground_lock:
+        before = len(ground_items)
+        ground_items[:] = [g for g in ground_items if g.get("id") != gid]
+        if len(ground_items) != before:
+            save_ground()
+
+    socketio.emit("ground_items", ground_items)
+
 @socketio.on("connect")
 def on_connect():
     sid = request.sid
+    ensure_mine_loop_started()
     socketio.emit("map_objects", map_objects, to=sid)
     players[sid] = {
         "x": 0,
@@ -518,7 +618,7 @@ def on_drop_item(data):
     if not u:
         return
 
-    slots = u.get("itemSlots") or [None, None]
+    slots = u.get("itemSlots") or [None, None, None, None, None]
     if not (0 <= int(slot_index) < len(slots)):
         return
 
@@ -566,7 +666,7 @@ def on_pickup_item(data):
     if not u:
         return
 
-    slots = u.get("itemSlots") or [None, None]
+    slots = u.get("itemSlots") or [None, None, None, None, None]
     slot_index = int(slot_index)
 
     if slot_index < 0 or slot_index >= len(slots):
@@ -810,10 +910,10 @@ def handle_unit_give_to_entity(data):
     u = find_unit(sid, unit_id)
     if not u:
         print(f"[unit_give_to_entity] unit not found for sid={sid} unit_id={unit_id}", flush=True)
-        socketio.emit("server_debug", {"msg": "unit_give_to_entity: unit not found or not owned by you"}, to=sid)
+        socketio.emit("server_debug", {"msg": "unit_give_to_entity: unit not owned by you"}, to=sid)
         return
 
-    slots = u.get("itemSlots") or [None, None]
+    slots = u.get("itemSlots") or [None, None, None, None, None]
     if unit_slot_index >= len(slots):
         print(f"[unit_give_to_entity] unit_slot_index out of range: {unit_slot_index} >= {len(slots)}", flush=True)
         socketio.emit("server_debug", {"msg": "unit_give_to_entity: slot index out of range"}, to=sid)
@@ -944,7 +1044,7 @@ def handle_entity_give_to_unit(data):
         # distance check
         # NOTE: allow transfers to entities regardless of distance (no drop radius)
         # make sure unit slot empty
-        uslots = u.get("itemSlots") or [None, None]
+        uslots = u.get("itemSlots") or [None, None, None, None, None]
         if unit_slot_index >= len(uslots): return
         if uslots[unit_slot_index] is not None: return
         # transfer
@@ -958,6 +1058,153 @@ def handle_entity_give_to_unit(data):
     socketio.emit("map_objects", map_objects)
     socketio.emit("unit_slots_update", {"unitId": unit_id, "itemSlots": uslots}, to=sid)
 
+
+@socketio.on("entity_give_to_ground")
+def handle_entity_give_to_ground(data):
+    sid = request.sid
+    entity_id = data.get("entityId")
+    try:
+        entity_slot_index = int(data.get("entitySlotIndex", -1))
+    except Exception:
+        entity_slot_index = -1
+    x = data.get("x")
+    y = data.get("y")
+
+    if not entity_id or entity_slot_index < 0 or x is None or y is None:
+        print(f"[entity_give_to_ground] invalid args: entity_id={entity_id} slot={entity_slot_index} x={x} y={y}", flush=True)
+        socketio.emit("server_debug", {"msg": "entity_give_to_ground: invalid args"}, to=sid)
+        return
+
+    with map_lock:
+        ent = next((m for m in map_objects if m.get("id") == entity_id), None)
+        if not ent:
+            print(f"[entity_give_to_ground] entity not found: {entity_id}", flush=True)
+            socketio.emit("server_debug", {"msg": "entity_give_to_ground: entity not found"}, to=sid)
+            return
+        eslots = ent.get("itemSlots") or []
+        if entity_slot_index >= len(eslots):
+            print(f"[entity_give_to_ground] slot index out of range: {entity_slot_index}", flush=True)
+            socketio.emit("server_debug", {"msg": "entity_give_to_ground: slot index out of range"}, to=sid)
+            return
+        item = eslots[entity_slot_index]
+        if not item:
+            print(f"[entity_give_to_ground] no item in slot {entity_slot_index}", flush=True)
+            socketio.emit("server_debug", {"msg": "entity_give_to_ground: no item in that slot"}, to=sid)
+            return
+
+        # remove from entity slot
+        eslots[entity_slot_index] = None
+        ent["itemSlots"] = eslots
+
+    # create ground item at provided coords
+    gi = {
+        "id": str(uuid.uuid4()),
+        "name": item.get("name", "item"),
+        "x": float(x),
+        "y": float(y)
+    }
+    ground_items.append(gi)
+
+    # persist
+    with ground_lock:
+        save_ground()
+    with map_lock:
+        save_map()
+
+    print(f"[entity_give_to_ground] success: entity {entity_id} slot {entity_slot_index} -> ground {gi['id']}", flush=True)
+    socketio.emit("server_debug", {"msg": "entity_give_to_ground: transfer success"}, to=sid)
+
+    # notify clients
+    socketio.emit("map_objects", map_objects)
+    socketio.emit("ground_items", ground_items)
+
+def mine_production_loop():
+    tick_count = 0
+    first_run = True
+    while True:
+        socketio.sleep(1)
+        now = time.time()
+        changed = False
+        tick_count += 1
+        
+        with map_lock:
+            mine_count = len([o for o in map_objects if o.get("kind") == "mine"])
+        
+        # Log every 30 ticks to avoid spam, and first run
+        if tick_count % 30 == 0 or (first_run and mine_count > 0):
+            print(f"[MINE_LOOP] Tick {tick_count}: {len(map_objects)} total objects, {mine_count} mines", flush=True)
+            first_run = False
+        
+        with map_lock:
+            for o in map_objects:
+                if o.get("kind") == "mine":
+                    m = o.get("meta", {})
+                    entity_flag = m.get("entity", False)
+                    
+                    if not entity_flag:
+                        if tick_count == 1:
+                            print(f"[MINE_LOOP] Mine {o.get('id')}: entity flag not set, normalizing and continuing", flush=True)
+                        m["entity"] = True
+                        # Backfill defaults so the mine can start ticking
+                        mine_meta = m.setdefault("mine", {})
+                        mine_meta.setdefault("resource", "red")
+                        m.setdefault("interval", 30)
+                        m.setdefault("nextTick", now + int(m.get("interval", 30)))
+                        changed = True
+                        continue
+                    
+                    interval = int(m.get("interval", 30))
+                    next_tick = float(m.get("nextTick", now + interval))
+                    time_until = next_tick - now
+                    
+                    # Log every tick for debugging
+                    if tick_count <= 5 or (tick_count % 10 == 0 and time_until < 5):
+                        print(f"[MINE_LOOP] Tick {tick_count} Mine {o.get('id')}: time_until={time_until:.1f}s", flush=True)
+                    
+                    if now >= next_tick:
+                        owner = o.get("owner")
+                        rtype = (m.get("mine", {}) or {}).get("resource", "red")
+                        print(f"[MINE_PRODUCE] Mine {o.get('id')} TRIGGERED! owner={owner}, resource={rtype}", flush=True)
+                        
+                        # Award resource to owner
+                        if owner:
+                            # Ensure player entry exists with full shape so client keeps it
+                            if owner not in players:
+                                print(f"[MINE_PRODUCE] Owner {owner[:8]} not in players, creating entry", flush=True)
+                                players[owner] = {
+                                    "resources": {"red": 0, "green": 0, "blue": 0},
+                                    "units": [],
+                                    "x": 0,
+                                    "y": 0,
+                                    "color": "#fff",
+                                }
+                            # If entry exists but missing fields, patch them
+                            players[owner].setdefault("resources", {"red": 0, "green": 0, "blue": 0})
+                            players[owner].setdefault("units", [])
+                            players[owner].setdefault("x", 0)
+                            players[owner].setdefault("y", 0)
+                            players[owner].setdefault("color", "#fff")
+
+                            pr = players[owner]["resources"]
+                            old_val = pr.get(rtype, 0)
+                            pr[rtype] = old_val + 1
+                            print(f"[MINE_PRODUCE] Awarded +1 {rtype} to {owner[:8]}. {rtype}: {old_val} -> {pr[rtype]}", flush=True)
+                        else:
+                            print(f"[MINE_PRODUCE] No owner for mine {o.get('id')}", flush=True)
+                        
+                        # Schedule next tick
+                        m["nextTick"] = now + interval
+                        print(f"[MINE_PRODUCE] Next tick scheduled for {now + interval}", flush=True)
+                        changed = True
+            
+            if changed:
+                save_map()
+                print(f"[MINE_PRODUCE] Map saved, triggering emit_state", flush=True)
+        
+        if changed:
+            emit_state()
+
 # Run server
 if __name__ == "__main__":
+    ensure_mine_loop_started()
     socketio.run(app, host="0.0.0.0", port=8080)

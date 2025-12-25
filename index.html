@@ -40,6 +40,17 @@
   }
   #buildBtn:hover { background:#666; }
   #buildBtn:disabled { background:#222; color:#777; cursor:not-allowed; }
+    #mineBtn {
+      width:100%;
+      height:40px;
+      margin-top:10px;
+      background:#444;
+      color:white;
+      border:1px solid #aaa;
+      cursor:pointer;
+    }
+    #mineBtn:hover { background:#666; }
+    #mineBtn:disabled { background:#222; color:#777; cursor:not-allowed; }
   </style>
   </head>
 
@@ -50,6 +61,7 @@
   <div id="panel">
     <div>Unit Selected</div>
     <button id="buildBtn">Place Town Center</button>
+    <button id="mineBtn">Place Mine</button>
   </div>
 
   <div id="buildingPanel" style="display:none; position:fixed; bottom:20px; left:20px; width:220px; height:120px; background:rgba(30,30,30,0.85); border:2px solid #888; padding:10px; color:white; font-family:monospace;">
@@ -257,6 +269,8 @@
   let mouse = {x:0,y:0};
   let buildMode = false;
   let localBuildingPlaced = false;
+    let mineMode = false;
+    let localMinePlaced = false;
   const socket = io({autoConnect: false});
   socket.on("server_debug", (data) => { try { console.log("SERVER_DEBUG:", data.msg); } catch(e){} });
   // Building image and default size (needed by static/draw.js)
@@ -264,6 +278,11 @@
   const BUILD_H = 256;
   const buildingImg = new Image();
   buildingImg.src = "static/tiles/building.png";
+  // Mine image and default size (used by mine placement ghost)
+  const MINE_W = 256;
+  const MINE_H = 256;
+  const mineImg = new Image();
+  mineImg.src = "static/tiles/mine.png";
   // Client-side per-town-center population limit (used for HUD cap calculation)
   const POP_LIMIT = 10;
   // How many town centers a player may place
@@ -283,6 +302,7 @@
   const hud = document.getElementById("hud");
   const panel = document.getElementById("panel");
   const buildBtn = document.getElementById("buildBtn");
+  const mineBtn = document.getElementById("mineBtn");
 
   function updateBuildButton() {
     if (!buildBtn) return;
@@ -291,6 +311,14 @@
     // disable if reached build limit or not enough red resources
     buildBtn.disabled = (owned >= BUILD_LIMIT) || ((resourceCounts.red || 0) < TOWN_CENTER_COST);
     buildBtn.title = `Cost: ${TOWN_CENTER_COST} resources`;
+  }
+
+  function updateMineButton() {
+    if (!mineBtn) return;
+    const mineCost = 3;
+    mineBtn.innerText = `Place Mine (Cost: ${mineCost} blue)`;
+    mineBtn.disabled = ((resourceCounts.blue || 0) < mineCost);
+    mineBtn.title = `Cost: ${mineCost} blue resources`;
   }
 
   // Entity inspector elements (used by openEntityInspector / input handlers)
@@ -311,6 +339,7 @@
     entityCloseBtn.onclick = () => {
       if (entityPanelEl) entityPanelEl.style.display = "none";
       selectedEntityId = null;
+      try { if (window.__mineCountdownTimer) { clearInterval(window.__mineCountdownTimer); window.__mineCountdownTimer = null; } } catch(e){}
     };
   }
 
@@ -409,42 +438,7 @@
     e.preventDefault();
   }
 
-  function onGlobalDragEnd(e) {
-    // stop capturing
-    window.removeEventListener("mousemove", onGlobalDragMove, true);
-    window.removeEventListener("mouseup", onGlobalDragEnd, true);
-
-    if (!draggingPickup) return;
-
-    const gi = groundItems.find(x => x.id === draggingPickup.groundItemId);
-    const picker = myUnits.find(u => u.id === draggingPickup.unitId);
-    draggingPickup = null;
-
-    if (!gi || !picker) return;
-
-    // must still be in range
-    if (!unitCanPickup(picker, gi)) return;
-
-    // must drop on a slot
-    const slotEl = findSlotElementAtScreen(e.clientX, e.clientY);
-    if (!slotEl) return;
-
-    const slotIndex = parseInt(slotEl.dataset.slotIndex, 10);
-    const unitId = slotEl.dataset.unitId;
-
-    const targetUnit = myUnits.find(u => u.id === unitId);
-    if (!targetUnit) return;
-
-    if (!targetUnit.itemSlots) targetUnit.itemSlots = [null, null];
-    if (targetUnit.itemSlots[slotIndex]) return; // must be empty
-
-    socket.emit("pickup_item", {
-      unitId: targetUnit.id,
-      slotIndex,
-      groundItemId: gi.id
-    });
-  }
-
+  // onGlobalDragEnd moved to static/input.js
 
   function renderUnitItems(unit) {
     currentItemsUnitId = unit.id;
@@ -452,9 +446,9 @@
     const itemsList = document.getElementById("items-list");
     itemsList.innerHTML = "";
 
-    if (!unit.itemSlots) unit.itemSlots = [null, null];
+    if (!unit.itemSlots) unit.itemSlots = [null, null, null, null, null];
 
-    for (let i = 0; i < 2; i++) {
+    for (let i = 0; i < 5; i++) {
       const slot = unit.itemSlots[i];
 
       const li = document.createElement("li");
@@ -495,7 +489,7 @@
 
         const targetUnit = myUnits.find(u => u.id === unit.id);
         if (!targetUnit) return;
-        if (!targetUnit.itemSlots) targetUnit.itemSlots = [null, null];
+        if (!targetUnit.itemSlots) targetUnit.itemSlots = [null, null, null, null, null];
 
         const slotIndex = i;
 
@@ -505,6 +499,14 @@
         slotIndex: i,
         groundItemId: payload.groundItemId
       });
+      // Optimistic local update: remove ground item and add to unit slot
+      try {
+        const giIndexLocal = groundItems.findIndex(g => g.id === payload.groundItemId);
+        if (giIndexLocal !== -1) groundItems.splice(giIndexLocal, 1);
+        unit.itemSlots = unit.itemSlots || [];
+        unit.itemSlots[i] = { id: ("local-" + (payload.groundItemId || Math.random())), name: (payload.name || "item") };
+        if (currentItemsUnitId === unit.id) renderUnitItems(unit);
+      } catch (ex) { console.error("optimistic pickup_item failed", ex); }
       return;
     }
 
@@ -599,6 +601,33 @@
       });
       return;
     }
+    // Dropping an item from an entity onto the world -> create ground item
+    if (payload.type === "entity_item") {
+      console.log('canvas drop: entity_item', { payload, socketConnected: socket && socket.connected, wx, wy });
+      // optimistic: remove from entity UI and add local ground item for immediate feedback
+      try {
+        const ent = (mapObjects || []).find(m => m.id === payload.entityId);
+        let itemName = null;
+        if (ent && ent.itemSlots && ent.itemSlots[payload.slotIndex]) {
+          const it = ent.itemSlots[payload.slotIndex];
+          itemName = it && it.name;
+          ent.itemSlots[payload.slotIndex] = null;
+          if (selectedEntityId === ent.id) openEntityInspector(ent);
+        }
+        const localGi = { id: 'local-' + (Date.now() + Math.floor(Math.random()*1000)), name: itemName || 'item', x: wx, y: wy };
+        groundItems = groundItems || [];
+        groundItems.push(localGi);
+      } catch (ex) { console.error('optimistic entity->ground failed', ex); }
+
+      socket.emit("entity_give_to_ground", {
+        entityId: payload.entityId,
+        entitySlotIndex: payload.slotIndex,
+        x: wx,
+        y: wy
+      });
+
+      return;
+    }
   });
 
 
@@ -622,8 +651,27 @@
     ensureEntityMeta(o);
     selectedEntityId = o.id;
 
-    entityIdLine.textContent =
-      `id: ${o.id} | type: ${o.type}${o.kind ? " | kind: " + o.kind : ""}`;
+    const ownerLabel = o.owner ? (players[o.owner]?.color ? o.owner.slice(0,6) : o.owner.slice(0,6)) : "(none)";
+    
+    // Build info line with size and collision info for tiles
+    let infoLine = `id: ${o.id} | type: ${o.type}${o.kind ? " | kind: " + o.kind : ""} | owner: ${ownerLabel}`;
+    
+    if (o.type === "tile" && o.meta) {
+      const tileW = o.meta.w || 0;
+      const tileH = o.meta.h || 0;
+      const collisionW = o.meta.cw || 0;
+      const collisionH = o.meta.ch || 0;
+      const collisionEnabled = o.meta.collides || false;
+      
+      infoLine += ` | size: ${tileW}x${tileH}`;
+      if (collisionEnabled) {
+        infoLine += ` | collision: ${collisionW}x${collisionH}`;
+      } else {
+        infoLine += ` | collision: OFF`;
+      }
+    }
+    
+    entityIdLine.textContent = infoLine;
 
     entityTitleInput.value = o.meta.title || getDefaultEntityTitle(o);
     entityBioInput.value = o.meta.bio || "";
@@ -644,22 +692,95 @@
     const entityItemsEl = document.getElementById("entity-items-list");
     if (entityItemsEl) {
       entityItemsEl.innerHTML = "";
+      // If in editor mode, show controls to add/remove persistent item slots
+      if (editorMode) {
+        const ctrl = document.createElement("div");
+        ctrl.style.display = "flex";
+        ctrl.style.gap = "6px";
+        ctrl.style.marginBottom = "6px";
+
+        const inc = document.createElement("button");
+        inc.textContent = "+ Slot";
+        inc.style.height = "26px";
+        inc.onclick = () => {
+          o.itemSlots = o.itemSlots || [];
+          o.itemSlots.push(null);
+          socket.emit("update_map_object", { id: o.id, itemSlots: o.itemSlots });
+          // re-open inspector to reflect change
+          openEntityInspector(o);
+        };
+
+        const dec = document.createElement("button");
+        dec.textContent = "- Slot";
+        dec.style.height = "26px";
+        dec.onclick = () => {
+          o.itemSlots = o.itemSlots || [];
+          if (o.itemSlots.length === 0) return;
+          // prevent removing a non-empty slot
+          const last = o.itemSlots[o.itemSlots.length - 1];
+          if (last) { alert("Cannot remove slot: last slot is not empty."); return; }
+          o.itemSlots.pop();
+          socket.emit("update_map_object", { id: o.id, itemSlots: o.itemSlots });
+          openEntityInspector(o);
+        };
+
+        ctrl.appendChild(inc);
+        ctrl.appendChild(dec);
+        entityItemsEl.appendChild(ctrl);
+      }
       const slots = o.itemSlots || [];
-      for (let si = 0; si < Math.max(2, slots.length); si++) {
+      const slotCount = Math.max(2, slots.length);
+
+      // container that will wrap slot elements (prevents vertical stacking)
+      const slotsContainer = document.createElement("div");
+      slotsContainer.style.display = "flex";
+      slotsContainer.style.flexWrap = "wrap";
+      slotsContainer.style.gap = "6px";
+      slotsContainer.style.alignItems = "flex-start";
+
+      const compact = slotCount > 3;
+
+      for (let si = 0; si < slotCount; si++) {
         const s = slots[si] || null;
         const li = document.createElement("li");
-        li.style.display = "flex";
-        li.style.justifyContent = "space-between";
-        li.style.alignItems = "center";
-        li.style.border = "1px solid #666";
-        li.style.padding = "6px";
-        li.style.marginBottom = "6px";
         li.dataset.slotIndex = si;
         li.dataset.entityId = o.id;
 
-        const left = document.createElement("div");
-        left.textContent = `Slot ${si+1}: ${s ? s.name : "(empty)"}`;
-        li.appendChild(left);
+        if (compact) {
+          // small square slot
+          li.style.width = "40px";
+          li.style.height = "40px";
+          li.style.display = "inline-flex";
+          li.style.alignItems = "center";
+          li.style.justifyContent = "center";
+          li.style.border = "1px solid #666";
+          li.style.borderRadius = "4px";
+          li.style.background = s ? "rgba(255,255,255,0.06)" : "transparent";
+          li.title = s ? (s.name || "item") : `(empty)`;
+          const dot = document.createElement("div");
+          dot.style.width = "22px";
+          dot.style.height = "22px";
+          dot.style.borderRadius = "3px";
+          dot.style.background = s ? "rgba(200,200,200,0.9)" : "rgba(0,0,0,0.15)";
+          dot.style.display = "flex";
+          dot.style.alignItems = "center";
+          dot.style.justifyContent = "center";
+          dot.style.fontSize = "11px";
+          dot.style.color = "#000";
+          dot.textContent = s ? (s.name ? s.name[0].toUpperCase() : "I") : "";
+          li.appendChild(dot);
+          li._dot = dot;
+        } else {
+          li.style.display = "flex";
+          li.style.justifyContent = "space-between";
+          li.style.alignItems = "center";
+          li.style.border = "1px solid #666";
+          li.style.padding = "6px";
+          li.style.marginBottom = "6px";
+          const left = document.createElement("div");
+          left.textContent = `Slot ${si+1}: ${s ? s.name : "(empty)"}`;
+          li.appendChild(left);
+        }
 
         // allow dropping unit_item onto entity slot
         li.addEventListener("dragover", (e) => { e.preventDefault(); li.style.outline = "2px dashed #fff"; });
@@ -698,8 +819,10 @@
           li.appendChild(chip);
         }
 
-        entityItemsEl.appendChild(li);
+        slotsContainer.appendChild(li);
       }
+      // append the wrapped slots container once
+      entityItemsEl.appendChild(slotsContainer);
     }
 
       // Render Abilities
@@ -729,6 +852,89 @@
             socket.emit("spawn_unit_from_entity", { entityId: o.id });
           };
           abilitiesEl.appendChild(btn);
+        }
+
+        // Mine production ability: dropdown + 30s timer
+        const isMine = (o.kind === "mine");
+        if (isMine) {
+          const wrap = document.createElement("div");
+          wrap.style.display = "flex";
+          wrap.style.gap = "8px";
+          wrap.style.alignItems = "center";
+
+          const owned = !!o.owner && o.owner === mySid;
+
+          const label = document.createElement("div");
+          label.textContent = "Mine:";
+          wrap.appendChild(label);
+
+          const select = document.createElement("select");
+          ["red","green","blue"].forEach(t => {
+            const opt = document.createElement("option");
+            opt.value = t;
+            opt.textContent = t.charAt(0).toUpperCase() + t.slice(1);
+            select.appendChild(opt);
+          });
+          const current = (o.meta && o.meta.mine && o.meta.mine.resource) ? o.meta.mine.resource : "red";
+          select.value = current;
+          if (!owned) {
+            select.disabled = true;
+            select.title = "Only the owner can change the resource";
+          }
+          select.onchange = () => {
+            if (!owned) return;
+            const sel = select.value;
+            // Preserve all existing meta when updating just the resource type
+            const updated = mapObjects.find(x => x.id === o.id);
+            if (updated && updated.meta && updated.meta.mine) {
+              updated.meta.mine.resource = sel;
+              socket.emit("update_map_object", { id: o.id, meta: updated.meta });
+            } else {
+              // Fallback if meta not found
+              socket.emit("update_map_object", { id: o.id, meta: { mine: { resource: sel } } });
+            }
+          };
+          wrap.appendChild(select);
+
+          const timerEl = document.createElement("div");
+          wrap.appendChild(timerEl);
+
+          // Function to update timer display
+          const updateMineTimer = () => {
+            // Re-fetch from mapObjects to ensure fresh nextTick
+            const current = mapObjects.find(x => x.id === selectedEntityId);
+            if (!current || current.kind !== "mine") {
+              // Entity deleted or no longer a mine, stop timer
+              if (window.__mineCountdownTimer) {
+                clearInterval(window.__mineCountdownTimer);
+                window.__mineCountdownTimer = null;
+              }
+              return;
+            }
+            const nextTick = (current.meta && current.meta.nextTick) ? Number(current.meta.nextTick) : null;
+            const now = Date.now() / 1000;
+            let rem = (nextTick) ? Math.max(0, Math.ceil(nextTick - now)) : 30;
+            timerEl.textContent = `Next in ${rem}s`;
+            
+            // Debug logs
+            if (!window.__mineTimerDebugLog) {
+              window.__mineTimerDebugLog = { count: 0 };
+            }
+            window.__mineTimerDebugLog.count++;
+            if (window.__mineTimerDebugLog.count % 5 === 0) {
+              console.log(`[MINE_TIMER] ${window.__mineTimerDebugLog.count}: nextTick=${nextTick}, now=${now.toFixed(1)}, rem=${rem}s, resource=${current.meta?.mine?.resource}`);
+            }
+          };
+
+          // Update immediately, then every 1s
+          updateMineTimer();
+
+          // live countdown based on server-provided nextTick
+          // Read from mapObjects to get fresh data on each tick, not stale closure
+          try { if (window.__mineCountdownTimer) clearInterval(window.__mineCountdownTimer); } catch(e){}
+          window.__mineCountdownTimer = setInterval(updateMineTimer, 1000);
+
+          abilitiesEl.appendChild(wrap);
         }
       }
 
@@ -1079,6 +1285,17 @@
     if (state.resources) {
       resources = state.resources;
     }
+    // sync map objects (for mine production timer updates)
+    if (state.map_objects) {
+      mapObjects = state.map_objects;
+      // refresh entity inspector if open (to get updated nextTick)
+      if (selectedEntityId) {
+        const updated = mapObjects.find(x => x.id === selectedEntityId);
+        if (updated && entityPanelEl && entityPanelEl.style.display === "block") {
+          openEntityInspector(updated);
+        }
+      }
+    }
 
     // ✅ FIRST: sync my own units from server (adopt server ids)
     const me = state.players?.[mySid];
@@ -1090,30 +1307,24 @@
       resourceCounts = me.resources || { red: 0, green: 0, blue: 0 };
       window.resourceCounts = resourceCounts;
     }
-    try { updateBuildButton(); } catch (e) {}
+    try { updateBuildButton(); updateMineButton(); } catch (e) {}
 
     for (const sid in players){
             const first = players[sid].units[0];
     if (first) { players[sid].x = first.x; players[sid].y = first.y; }
     }
     
-    // existing: remove players no longer on server
+    // existing: remove players no longer on server (but keep players that exist even if they currently have 0 units)
     for (const sid in players) {
-      if (!state.players[sid] || !state.players[sid].units || state.players[sid].units.length === 0) {
+      if (!state.players[sid]) {
         delete players[sid];
       }
     }
 
-    // ✅ sync other players as you already do (but using same merge helper)
+    // ✅ sync other players as you already do (but keep them even if units array is empty)
     for (const sid in state.players) {
-
       if (sid === mySid) continue;
       const sp = state.players[sid];
-
-      if (!sp.units || sp.units.length === 0) {
-        delete players[sid];
-        continue;
-      }
 
       if (!players[sid]) players[sid] = { x: 0, y: 0, color: "#fff", units: [] };
 
@@ -1121,7 +1332,8 @@
       players[sid].y = sp.y;
       players[sid].color = sp.color;
 
-      players[sid].units = mergeUnitsPreserveFrames(players[sid].units || [], sp.units);
+      const serverUnits = Array.isArray(sp.units) ? sp.units : [];
+      players[sid].units = mergeUnitsPreserveFrames(players[sid].units || [], serverUnits);
     }
 
     // buildings...
@@ -1249,7 +1461,7 @@
       }
     }
     // update build button count/limit
-    try { updateBuildButton(); } catch(e){}
+    try { updateBuildButton(); updateMineButton(); } catch(e){}
   });
 
   // Update entity HP when server reports damage
@@ -1268,6 +1480,15 @@
   });
 
   tile.onload = draw;
+  
+  // Start the animation loop once assets are loaded
+  (function startDraw() {
+    if (window.ASSETS_LOADED) {
+      draw();
+    } else {
+      requestAnimationFrame(startDraw);
+    }
+  })();
   </script>
   </body>
   </html>

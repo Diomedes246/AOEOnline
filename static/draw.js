@@ -21,10 +21,23 @@ function drawEntityTitle(obj, sx, sy) {
     ? obj.meta.title
     : getDefaultEntityTitle(obj);
 
-  ctx.fillStyle = "white";
-  ctx.font = "12px monospace";
+  // Draw title (primary) and owner (smaller, beneath)
   ctx.textAlign = "center";
-  ctx.fillText(title, sx, sy - 40);
+
+  // title line
+  ctx.fillStyle = "white";
+  ctx.font = "13px monospace";
+  ctx.fillText(title, sx, sy - 36);
+
+  // owner line
+  const owner = obj.owner || (obj.meta && obj.meta.owner) || null;
+  if (owner) {
+    const ownerShort = String(owner).slice(0,6);
+    const ownerColor = (players && players[owner] && players[owner].color) ? players[owner].color : "#ccc";
+    ctx.font = "11px monospace";
+    ctx.fillStyle = ownerColor;
+    ctx.fillText(`owner: ${ownerShort}`, sx, sy - 22);
+  }
 }
 
 function renderYForWorld(obj) {
@@ -43,7 +56,7 @@ function renderYForWorld(obj) {
 }
 
 function renderYForUnit(u) {
-  return u.y + SPRITE_H/4; // feet-ish anchor
+  return u.y;
 }
 
 function mouseWorld() {
@@ -109,7 +122,6 @@ function drawHarvestBars() {
 function draw() {
   // Wait until all assets have loaded (overlay will be hidden).
   if (!window.ASSETS_LOADED) {
-    requestAnimationFrame(draw);
     return;
   }
   update();
@@ -151,7 +163,6 @@ worldRenderables.sort((a,b) => {
 for (const obj of worldRenderables) {
   const sx = canvas.width/2 + obj.x - camera.x;
   const sy = canvas.height/2 + obj.y - camera.y;
-
   if (obj._type === "tree") {
     ctx.drawImage(treeImg, sx - TREE_W/2, sy - TREE_H, TREE_W, TREE_H);
     continue;
@@ -170,6 +181,9 @@ for (const obj of worldRenderables) {
   }
 
   if (obj._type === "ground") {
+    // Skip drawing if this item is being dragged
+    if (draggingPickup && draggingPickup.groundItemId === obj.id) continue;
+    
     const icon = itemIcons[obj.name];
     if (icon && icon.complete && icon.naturalWidth > 0) {
       ctx.drawImage(icon, sx - GROUND_ITEM_SIZE/2, sy - GROUND_ITEM_SIZE/2, GROUND_ITEM_SIZE, GROUND_ITEM_SIZE);
@@ -177,53 +191,96 @@ for (const obj of worldRenderables) {
     continue;
   }
 
-if (obj._type === "tile") {
-  const def = TILE_DEFS[obj.kind];
-  const img = tileImages[obj.kind];
-  if (!def) continue;
+  if (obj._type === "tile") {
+    const def = TILE_DEFS[obj.kind] || { w: obj.meta?.w ?? 256, h: obj.meta?.h ?? 256, _placeholder: true };
 
-const w = obj.meta?.w ?? def.w;
-const h = obj.meta?.h ?? def.h;
+    const w = obj.meta?.w ?? def.w ?? 256;
+    const h = obj.meta?.h ?? def.h ?? 256;
+    const img = tileImages[obj.kind];
 
-
-  if (img && img.complete && img.naturalWidth > 0) {
-    ctx.drawImage(img, sx - w / 2, sy - h / 2, w, h);
-  }
-
-  // ✅ debug draw tile collision (rect centered on tile x,y)
-  if (DEBUG_COLLISIONS && obj.meta?.collides) {
-    ctx.strokeStyle = "rgba(0,255,255,0.4)";
-    ctx.lineWidth = 2;
-    ctx.setLineDash([6, 4]);
-    ctx.strokeRect(
-      sx - (obj.meta.cw ?? 0) / 2,
-      sy - (obj.meta.ch ?? 0) / 2,
-      (obj.meta.cw ?? 0),
-      (obj.meta.ch ?? 0)
-    );
-    ctx.setLineDash([]);
-  }
-  drawEntityTitle(obj, sx, sy);
-  // draw health bar for entity tiles
-  if (obj.meta?.entity) {
-    const hp = obj.hp ?? obj.meta.hp ?? null;
-    if (hp !== null) {
-      const wbar = obj.meta?.w ?? def.w;
-      const hbar = 8;
-      const bx = sx - Math.min(120, wbar) / 2;
-      const by = sy - (obj.meta?.h ?? def.h) / 2 - 18;
-      ctx.fillStyle = 'rgba(0,0,0,0.6)';
-      ctx.fillRect(bx, by, Math.min(120, wbar), hbar);
-      const pct = Math.max(0, Math.min(1, (hp / (obj.meta?.maxHp || 500))));
-      ctx.fillStyle = (obj.kind === 'house') ? '#4CAF50' : 'red';
-      ctx.fillRect(bx, by, Math.min(120, wbar) * pct, hbar);
-      ctx.strokeStyle = 'white';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(bx, by, Math.min(120, wbar), hbar);
+    if (img && img.complete && img.naturalWidth > 0) {
+      ctx.drawImage(img, sx - w / 2, sy - h / 2, w, h);
+    } else {
+      // Fallback so objects with missing art still render visibly
+      ctx.fillStyle = "rgba(120,120,120,0.35)";
+      ctx.fillRect(sx - w / 2, sy - h / 2, w, h);
+      ctx.strokeStyle = "#f66";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(sx - w / 2, sy - h / 2, w, h);
+      ctx.fillStyle = "#fff";
+      ctx.font = "12px monospace";
+      ctx.textAlign = "center";
+      ctx.fillText(obj.kind || "tile", sx, sy - h / 2 + 16);
     }
+
+    // Mine production progress (timer-synced)
+    if (obj.kind === "mine") {
+      const interval = Number(obj.meta?.interval || 30);
+      const nextTick = Number(obj.meta?.nextTick || 0);
+      const now = Date.now() / 1000;
+      const remaining = nextTick ? Math.max(0, nextTick - now) : interval;
+      const pct = Math.max(0, Math.min(1, 1 - (remaining / interval)));
+
+      const barW = Math.min(140, w);
+      const barH = 10;
+      const bx = sx - barW / 2;
+      const by = sy - h / 2 - 10; // nudge lower toward the sprite
+
+      // resource color indicator
+      const rtype = obj.meta?.mine?.resource || "red";
+      const colorMap = { red: "#e53935", green: "#43a047", blue: "#1e88e5" };
+      const rc = colorMap[rtype] || "#888";
+      const sq = barH;
+      ctx.fillStyle = rc;
+      ctx.fillRect(bx - sq - 4, by, sq, barH);
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(bx - sq - 4, by, sq, barH);
+
+      // progress bar
+      ctx.fillStyle = "rgba(0,0,0,0.6)";
+      ctx.fillRect(bx, by, barW, barH);
+      ctx.fillStyle = rc;
+      ctx.fillRect(bx, by, barW * pct, barH);
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(bx, by, barW, barH);
+    }
+
+    // ✅ debug draw tile collision (rect centered on tile x,y)
+    if (DEBUG_COLLISIONS && obj.meta?.collides) {
+      ctx.strokeStyle = "rgba(0,255,255,0.4)";
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 4]);
+      ctx.strokeRect(
+        sx - (obj.meta.cw ?? 0) / 2,
+        sy - (obj.meta.ch ?? 0) / 2,
+        (obj.meta.cw ?? 0),
+        (obj.meta.ch ?? 0)
+      );
+      ctx.setLineDash([]);
+    }
+    drawEntityTitle(obj, sx, sy);
+    // draw health bar for entity tiles
+    if (obj.meta?.entity) {
+      const hp = obj.hp ?? obj.meta.hp ?? null;
+      if (hp !== null) {
+        const wbar = obj.meta?.w ?? def.w;
+        const hbar = 8;
+        const bx = sx - Math.min(120, wbar) / 2;
+        const by = sy - (obj.meta?.h ?? def.h) / 2 - 30; // higher to leave gap above progress bar
+        ctx.fillStyle = 'rgba(0,0,0,0.6)';
+        ctx.fillRect(bx, by, Math.min(120, wbar), hbar);
+        const pct = Math.max(0, Math.min(1, (hp / (obj.meta?.maxHp || 500))));
+        ctx.fillStyle = (obj.kind === 'house') ? '#4CAF50' : 'red';
+        ctx.fillRect(bx, by, Math.min(120, wbar) * pct, hbar);
+        ctx.strokeStyle = 'white';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(bx, by, Math.min(120, wbar), hbar);
+      }
+    }
+    continue;
   }
-  continue;
-}
 
 
   if (obj._type === "building") {
@@ -489,6 +546,24 @@ for (const item of unitRenderables) {
     const bx = canvas.width / 2 + wx - camera.x;
     const by = canvas.height / 2 + wy - camera.y;
     ctx.drawImage(buildingImg, bx - BUILD_W / 2, by - BUILD_H / 2, BUILD_W, BUILD_H);
+    ctx.globalAlpha = 1;
+  }
+
+  // Mine placement preview (mirrors building ghost)
+  if (mineMode) {
+    ctx.globalAlpha = 0.5;
+    const wx = camera.x + mouse.x - canvas.width / 2;
+    const wy = camera.y + mouse.y - canvas.height / 2;
+    const mx = canvas.width / 2 + wx - camera.x;
+    const my = canvas.height / 2 + wy - camera.y;
+    try { if (!window.__minePreviewLoggedOnce) { console.log('MINE: drawing ghost preview'); window.__minePreviewLoggedOnce = true; } } catch(e){}
+    if (mineImg && mineImg.complete && mineImg.naturalWidth > 0) {
+      ctx.drawImage(mineImg, mx - MINE_W / 2, my - MINE_H / 2, MINE_W, MINE_H);
+    } else {
+      // fallback ghost box so it's visible even before image load
+      ctx.strokeStyle = "white";
+      ctx.strokeRect(mx - MINE_W / 2, my - MINE_H / 2, MINE_W, MINE_H);
+    }
     ctx.globalAlpha = 1;
   }
 

@@ -65,8 +65,8 @@ canvas.addEventListener("mousemove", e=>{
     if (!o || !o.meta || !o.meta.entity) continue;
     // only consider enemy-owned entities
     if (o.owner === mySid) continue;
-    // only buildings or town_center kind are attackable
-    if (!(o.type === 'building' || o.kind === 'town_center')) continue;
+    // only buildings, town centers, or mines are attackable
+    if (!(o.type === 'building' || o.kind === 'town_center' || o.kind === 'mine')) continue;
 
     // compute collision extents
     let w = BUILD_W, h = BUILD_H;
@@ -88,14 +88,52 @@ function getFirstSelectedUnit() {
 }
 
 function findSlotElementAtScreen(x, y) {
+  // Use bounding-rect hit testing for reliability across overlays
+  try {
+    // Prefer entity slots first (so dragging from ground targets chests/containers)
+    const entityList = document.getElementById("entity-items-list");
+    if (entityList) {
+      const lis = entityList.querySelectorAll("li");
+      // First pass: exact hit test
+      for (const li of lis) {
+        const r = li.getBoundingClientRect();
+        if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) {
+          return li;
+        }
+      }
+      // Second pass: with generous padding for compact slots
+      const PAD = 15;
+      for (const li of lis) {
+        const r = li.getBoundingClientRect();
+        if (x >= r.left - PAD && x <= r.right + PAD && y >= r.top - PAD && y <= r.bottom + PAD) {
+          return li;
+        }
+      }
+    }
+
+    // Then check unit slots
+    const unitList = document.getElementById("items-list");
+    if (unitList) {
+      const lis = unitList.querySelectorAll("li");
+      for (const li of lis) {
+        const r = li.getBoundingClientRect();
+        if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) {
+          return li;
+        }
+      }
+    }
+  } catch (e) {
+    // ignore and try DOM hit test below
+  }
+
+  // Fallback: use elementFromPoint to find closest li (covers cases where rect scanning missed)
   const el = document.elementFromPoint(x, y);
   if (!el) return null;
-  // climb up to the LI
-  // allow detecting either player unit slots or entity slots
-  const unitSlot = el.closest && el.closest("#items-list li");
-  if (unitSlot) return unitSlot;
   const entitySlot = el.closest && el.closest("#entity-items-list li");
   if (entitySlot) return entitySlot;
+  const unitSlot = el.closest && el.closest("#items-list li");
+  if (unitSlot) return unitSlot;
+
   return null;
 }
 
@@ -144,27 +182,82 @@ canvas.addEventListener("mousedown", e => {
   const wx = camera.x + mouse.x - canvas.width / 2;
   const wy = camera.y + mouse.y - canvas.height / 2;
 
-  // ✅ Click entity to inspect (works even when editorMode is off)
-if (e.button === 0) {
-  const hitEntity = hitTestMapObject(wx, wy);
-  if (hitEntity) {
-    openEntityInspector(hitEntity);
-    e.preventDefault();
-    return;
-  }
-}
-
-    if (editorMode && e.button === 0) {
-    if (e.shiftKey) {
-      // delete nearest within radius
-      let nearest = null, best = 40;
-      for (const o of mapObjects) {
-        const d = Math.hypot(o.x - wx, o.y - wy);
-        if (d < best) { best = d; nearest = o; }
-      }
-      if (nearest) socket.emit("delete_map_object", { id: nearest.id });
+  // ✅ Shift-delete in editor mode FIRST (highest priority)
+  if (editorMode && e.button === 0 && e.shiftKey) {
+    let nearest = null, best = 40, nearestType = null;
+    for (const o of mapObjects) {
+      const d = Math.hypot(o.x - wx, o.y - wy);
+      if (d < best) { best = d; nearest = o; nearestType = 'map'; }
+    }
+    for (const g of groundItems || []) {
+      const d = Math.hypot(g.x - wx, g.y - wy);
+      if (d < best) { best = d; nearest = g; nearestType = 'ground'; }
+    }
+    if (nearest) {
+      if (nearestType === 'map') socket.emit("delete_map_object", { id: nearest.id });
+      else socket.emit("delete_ground_item", { id: nearest.id });
+      e.preventDefault();
       return;
     }
+  }
+
+  // ✅ Check for ground item drag (before entity inspect or editor placement)
+  if (e.button === 0 && !e.shiftKey) {
+    const hit = groundItems.find(it => Math.hypot(it.x - wx, it.y - wy) < 18);
+    if (hit) {
+      const picker = getFirstSelectedUnit();
+      const canPickupWithUnit = picker ? unitCanPickup(picker, hit) : false;
+      draggingPickup = { groundItemId: hit.id, itemName: hit.name };
+      if (picker && canPickupWithUnit) draggingPickup.unitId = picker.id;
+
+      dragMouse.x = e.clientX;
+      dragMouse.y = e.clientY;
+
+      // Create drag ghost above DOM
+      createDragGhost(hit.name || 'item');
+      
+      // CAPTURE events globally so UI can't "steal" the drag
+      const dragMoveHandler = (ev) => {
+        dragMouse.x = ev.clientX;
+        dragMouse.y = ev.clientY;
+        updateDragGhost(ev.clientX, ev.clientY);
+        
+        // Highlight slots when hovering during ground item drag
+        if (draggingPickup && draggingPickup.groundItemId) {
+          const slotEl = findSlotElementAtScreen(ev.clientX, ev.clientY);
+          document.querySelectorAll("li[data-slot-index]").forEach(li => {
+            li.style.outline = "";
+            li.style.backgroundColor = "";
+          });
+          if (slotEl) {
+            slotEl.style.outline = "3px solid #0ff";
+            slotEl.style.backgroundColor = "rgba(0,255,255,0.2)";
+          }
+        }
+        ev.preventDefault();
+      };
+      
+      window.addEventListener("mousemove", dragMoveHandler, true);
+      window.addEventListener("mouseup", onGlobalDragEnd, true);
+
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+  }
+
+  // ✅ Click entity to inspect
+  if (e.button === 0) {
+    const hitEntity = hitTestMapObject(wx, wy);
+    if (hitEntity) {
+      openEntityInspector(hitEntity);
+      e.preventDefault();
+      return;
+    }
+  }
+
+  // ✅ Editor placement (non-shift click)
+  if (editorMode && e.button === 0 && !e.shiftKey) {
 
 const [type, kind] = brushSelect.value.split(":");
 
@@ -190,26 +283,6 @@ socket.emit("place_map_object", { type, kind, x: wx, y: wy, meta });
 
     return;
   }
-
-if (e.button === 0) {
-  const picker = getFirstSelectedUnit();
-  if (picker) {
-    const hit = groundItems.find(it => Math.hypot(it.x - wx, it.y - wy) < 18);
-    if (hit && unitCanPickup(picker, hit)) {
-      draggingPickup = { groundItemId: hit.id, unitId: picker.id };
-
-      dragMouse.x = e.clientX;
-      dragMouse.y = e.clientY;
-
-      // CAPTURE events globally so UI can't "steal" the drag
-      window.addEventListener("mousemove", onGlobalDragMove, true);
-      window.addEventListener("mouseup", onGlobalDragEnd, true);
-
-      e.preventDefault();
-      return;
-    }
-  }
-}
 
   if (e.button === 0) { // left click
 
@@ -240,6 +313,33 @@ if (e.button === 0) {
     socket.emit("place_map_object", { type: "tile", kind: "town_center", x: wx, y: wy, meta });
     return;
   }
+
+    // ===== Mine placement =====
+    if (mineMode && !localMinePlaced) {
+      const mineCost = 3;
+      try { console.log('MINE: attempting placement'); } catch(e){}
+      if (((window.resourceCounts && window.resourceCounts.blue) || 0) < mineCost) {
+        try { mineMode = false; localMinePlaced = false; mineBtn.disabled = false; } catch(e){}
+        alert(`Not enough blue resources to build Mine (requires ${mineCost})`);
+        return;
+      }
+      localMinePlaced = true;
+      mineMode = false;
+      try { mineBtn.disabled = true; } catch(e){}
+      const meta = {
+        entity: true,
+        title: "Mine",
+        bio: "",
+        actions: [],
+        collides: true,
+        cw: MINE_W,
+        ch: MINE_H,
+        w: MINE_W,
+        h: MINE_H
+      };
+      socket.emit("place_map_object", { type: "tile", kind: "mine", x: wx, y: wy, meta });
+      return;
+    }
 
     // ===== Check for building click =====
     let clickedBuilding = null;
@@ -297,99 +397,204 @@ if (e.button === 0) {
 });
 
 function onGlobalDragMove(e) {
-  // keep mouse updated even over UI
   dragMouse.x = e.clientX;
   dragMouse.y = e.clientY;
 
-  // optional: block text selection while dragging
+  // Update drag ghost position
+  updateDragGhost(e.clientX, e.clientY);
+
+  // Highlight slots when hovering during ground item drag
+  if (draggingPickup && draggingPickup.groundItemId) {
+    const slotEl = findSlotElementAtScreen(e.clientX, e.clientY);
+    // Clear previous highlights
+    document.querySelectorAll("li[data-slot-index]").forEach(li => {
+      li.style.outline = "";
+      li.style.backgroundColor = "";
+    });
+    // Highlight current slot
+    if (slotEl) {
+      slotEl.style.outline = "3px solid #0ff";
+      slotEl.style.backgroundColor = "rgba(0,255,255,0.2)";
+    }
+  }
+
   e.preventDefault();
 }
 
-function onGlobalDragEnd(e) {
-  // stop capturing
-  window.removeEventListener("mousemove", onGlobalDragMove, true);
-  window.removeEventListener("mouseup", onGlobalDragEnd, true);
+// Drag ghost visual (renders above DOM)
+function createDragGhost(name) {
+  removeDragGhost();
+  const g = document.createElement('div');
+  g.id = 'drag-ghost';
+  g.style.position = 'fixed';
+  g.style.pointerEvents = 'none';
+  g.style.zIndex = '999999';
+  g.style.width = '40px';
+  g.style.height = '40px';
+  g.style.background = 'rgba(100,150,255,0.8)';
+  g.style.border = '2px solid #fff';
+  g.style.borderRadius = '4px';
+  g.style.display = 'flex';
+  g.style.alignItems = 'center';
+  g.style.justifyContent = 'center';
+  g.style.color = '#fff';
+  g.style.fontSize = '12px';
+  g.style.fontWeight = 'bold';
+  g.textContent = name.substring(0, 3).toUpperCase();
+  document.body.appendChild(g);
+}
 
-  if (!draggingPickup) return;
+function updateDragGhost(x, y) {
+  const g = document.getElementById('drag-ghost');
+  if (g) {
+    g.style.left = (x - 20) + 'px';
+    g.style.top = (y - 20) + 'px';
+  }
+}
+
+function removeDragGhost() {
+  const g = document.getElementById('drag-ghost');
+  if (g && g.parentNode) g.parentNode.removeChild(g);
+}
+
+// Ensure cleanup also occurs on mouseup anywhere as a fallback
+// BUT only if onGlobalDragEnd isn't handling it
+let dragEndHandled = false;
+document.addEventListener('mouseup', () => {
+  setTimeout(() => {
+    try { 
+      if (!dragEndHandled && window.cleanupDragState) window.cleanupDragState(); 
+    } catch (e) {}
+  }, 100);
+}, true);
+
+function onGlobalDragEnd(e) {
+  dragEndHandled = true;
+  
+  function finalizeDragCleanup() {
+    try { window.removeEventListener("mousemove", onGlobalDragMove, true); } catch (ex) {}
+    try { window.removeEventListener("mouseup", onGlobalDragEnd, true); } catch (ex) {}
+    try { draggingPickup = null; } catch (ex) {}
+    try { dragMouse.x = 0; dragMouse.y = 0; } catch (ex) {}
+    try { canvas.style.cursor = "default"; } catch (ex) {}
+    try { removeDragGhost(); } catch (ex) {}
+    try { document.querySelectorAll("li[data-slot-index]").forEach(li => { li.style.outline = ""; li.style.backgroundColor = ""; }); } catch (ex) {}
+    try { setTimeout(()=>{ if (document.activeElement && typeof document.activeElement.blur === 'function') document.activeElement.blur(); }, 0); } catch (ex) {}
+    dragEndHandled = false;
+  }
+
+  // expose a global cleanup in case other modules need to force-remove the drag state
+  try { window.cleanupDragState = function(){ try{ draggingPickup = null; }catch(e){} try{ removeDragGhost(); }catch(e){} try{ document.querySelectorAll("li[data-slot-index]").forEach(li => li.style.outline = ""); }catch(e){} }; } catch (ex) {}
+
+  if (!draggingPickup) { 
+    finalizeDragCleanup(); 
+    return; 
+  }
 
   const gi = groundItems.find(x => x.id === draggingPickup.groundItemId);
   const picker = myUnits.find(u => u.id === draggingPickup.unitId);
+  const dragData = draggingPickup; // Save reference before cleanup
   draggingPickup = null;
 
-  if (!gi || !picker) return;
+  if (!gi) { finalizeDragCleanup(); return; }
 
-  // must still be in range
-  if (!unitCanPickup(picker, gi)) return;
+  // NOTE: range check for pickup is only required when dropping into a unit slot.
 
   // must drop on a slot
-  const slotEl = findSlotElementAtScreen(e.clientX, e.clientY);
-  if (!slotEl) return;
+  let slotEl = findSlotElementAtScreen(e.clientX, e.clientY);
+  if (!slotEl) {
+    // Fallback: try nearest entity slot if user released slightly off-target
+    const entityList = document.getElementById("entity-items-list");
+    if (entityList) {
+      let best = null;
+      let bestDist = Infinity;
+      const lis = entityList.querySelectorAll('li');
+      for (const li of lis) {
+        const r = li.getBoundingClientRect();
+        // center distance
+        const cx = (r.left + r.right) / 2;
+        const cy = (r.top + r.bottom) / 2;
+        const dx = e.clientX - cx;
+        const dy = e.clientY - cy;
+        const d = Math.hypot(dx, dy);
+        if (d < bestDist) { bestDist = d; best = li; }
+        // immediate accept if inside expanded rect
+        const PAD = 20;
+        if (e.clientX >= r.left - PAD && e.clientX <= r.right + PAD && e.clientY >= r.top - PAD && e.clientY <= r.bottom + PAD) {
+          best = li; bestDist = d; break;
+        }
+      }
+      if (best && bestDist < 80) {
+        slotEl = best;
+      } else {
+        finalizeDragCleanup();
+        return;
+      }
+    } else {
+      finalizeDragCleanup();
+      return;
+    }
+  }
 
   const slotIndex = parseInt(slotEl.dataset.slotIndex, 10);
-  // if slot belongs to an entity slot list, handle ground -> entity transfer
-  const entityContainer = slotEl.closest && slotEl.closest("#entity-items-list");
-  if (entityContainer) {
-    const entityId = slotEl.dataset.entityId;
-    if (!entityId) return;
-    console.log("ground -> entity drop", { entityId, entitySlotIndex: slotIndex, groundId: gi.id });
+  
+  // Check if this is an entity slot
+  const entityId = slotEl.dataset.entityId;
+  if (entityId) {
+    // Ground -> Entity drop
     socket.emit("ground_give_to_entity", {
       entityId,
       entitySlotIndex: slotIndex,
       groundItemId: gi.id
     });
+    // Optimistic local update: remove ground item and add to entity slot
+    try {
+      const giIndexLocal = groundItems.findIndex(g => g.id === gi.id);
+      if (giIndexLocal !== -1) groundItems.splice(giIndexLocal, 1);
+      const entLocal = mapObjects.find(m => m.id === entityId);
+      if (entLocal) {
+        entLocal.itemSlots = entLocal.itemSlots || [];
+        entLocal.itemSlots[slotIndex] = { id: gi.id, name: gi.name };
+        if (selectedEntityId === entityId) openEntityInspector(entLocal);
+      }
+    } catch (ex) { console.error("optimistic ground->entity update failed", ex); }
+    finalizeDragCleanup();
     return;
   }
 
+  // Check if this is a unit slot
   const unitId = slotEl.dataset.unitId;
+  if (!unitId) { finalizeDragCleanup(); return; }
+  
   const targetUnit = myUnits.find(u => u.id === unitId);
-  if (!targetUnit) return;
+  if (!targetUnit) { finalizeDragCleanup(); return; }
 
   if (!targetUnit.itemSlots) targetUnit.itemSlots = [null, null];
   if (targetUnit.itemSlots[slotIndex]) return; // must be empty
+  // Ensure we have a unit picker in range for unit-slot pickups
+  if (!picker || !unitCanPickup(picker, gi)) {
+    finalizeDragCleanup();
+    return;
+  }
 
   socket.emit("pickup_item", {
     unitId: targetUnit.id,
     slotIndex,
     groundItemId: gi.id
   });
+  // Optimistic local update: remove ground item and add to unit slot immediately
+  try {
+    const giIndexLocal = groundItems.findIndex(g => g.id === gi.id);
+    if (giIndexLocal !== -1) groundItems.splice(giIndexLocal, 1);
+    targetUnit.itemSlots = targetUnit.itemSlots || [];
+    targetUnit.itemSlots[slotIndex] = { id: ("local-" + (gi.id || Math.random())), name: gi.name || "item" };
+    if (currentItemsUnitId === targetUnit.id) renderUnitItems(targetUnit);
+  } catch (ex) { console.error("optimistic pickup_item failed", ex); }
+  finalizeDragCleanup();
 }
 
-canvas.addEventListener("mouseup", (e) => {
-  if (e.button !== 0) return;
-  if (!draggingPickup) return;
-
-  const gi = groundItems.find(x => x.id === draggingPickup.groundItemId);
-  const picker = myUnits.find(u => u.id === draggingPickup.unitId);
-  draggingPickup = null;
-
-  if (!gi || !picker) return;
-
-  // Must still be in range at drop time
-  if (!unitCanPickup(picker, gi)) return;
-
-  // Must drop onto a slot in the UI
-  const slotEl = findSlotElementAtScreen(e.clientX, e.clientY);
-  if (!slotEl) return;
-
-  const slotIndex = parseInt(slotEl.dataset.slotIndex, 10);
-  const unitId = slotEl.dataset.unitId;
-
-  // Only allow equipping to LOCAL unit equipment panel
-  const targetUnit = myUnits.find(u => u.id === unitId);
-  if (!targetUnit) return;
-
-  if (!targetUnit.itemSlots) targetUnit.itemSlots = [null, null];
-
-  // slot must be empty
-  if (targetUnit.itemSlots[slotIndex]) return;
-
-  // equip
-  socket.emit("pickup_item", {
-    unitId: targetUnit.id,
-    slotIndex,
-    groundItemId: gi.id
-  });
-});
+// OLD CANVAS MOUSEUP HANDLER REMOVED
+// Ground item drag/drop now handled by onGlobalDragEnd which supports both unit slots AND entity slots
 
 canvas.addEventListener("mouseup", e=>{
   if(e.button===0){
@@ -438,8 +643,14 @@ canvas.addEventListener("mouseup", e=>{
         function findEntityAt(wx, wy) {
           for (const o of (mapObjects || [])) {
             if (!o.meta?.entity) continue;
-            const w = o.meta?.cw ?? o.meta?.w ?? BUILD_W;
-            const h = o.meta?.ch ?? o.meta?.h ?? BUILD_H;
+            // Use collision box if present; otherwise tile size or sensible defaults
+            if (o.type === "building") {
+              var w = BUILD_W, h = BUILD_H;
+            } else {
+              const def = TILE_DEFS[o.kind] || { w: 256, h: 256 };
+              var w = o.meta?.cw ?? o.meta?.w ?? def.w;
+              var h = o.meta?.ch ?? o.meta?.h ?? def.h;
+            }
             const left = o.x - w/2;
             const right = o.x + w/2;
             const top = o.y - h/2;
@@ -479,7 +690,14 @@ canvas.addEventListener("mouseup", e=>{
             const attackX = clickedEntity.x - nx * desiredDist;
             const attackY = clickedEntity.y - ny * desiredDist;
 
-            u.targetEnemy = { kind: 'entity', entityId: clickedEntity.id, x: clickedEntity.x, y: clickedEntity.y, attackPoint: { x: attackX, y: attackY } };
+            u.targetEnemy = {
+              kind: 'entity',
+              entityId: clickedEntity.id,
+              x: clickedEntity.x,
+              y: clickedEntity.y,
+              attackPoint: { x: attackX, y: attackY },
+              userIssued: true // keep attack order even when far away
+            };
             u.manualMove = false;
           } else if (clickedResource) {
             // ✅ resource gather command
@@ -675,8 +893,15 @@ socket.emit("spawn_unit", { unit: newUnit });
 document.addEventListener('click', (ev) => {
   const t = ev.target;
   if (!t) return;
-  if (t.id === 'buildBtn' || t.closest && t.closest('#buildBtn')) {
+  if (t.id === 'buildBtn' || (t.closest && t.closest('#buildBtn'))) {
     if (!localBuildingPlaced) buildMode = true;
+    try { console.log('BUILD: buildMode ON'); } catch(e){}
+  }
+  if (t.id === 'mineBtn' || (t.closest && t.closest('#mineBtn'))) {
+    if (!localMinePlaced) {
+      mineMode = true;
+      try { console.log('MINE: mineMode ON'); } catch(e){}
+    }
   }
 });
 

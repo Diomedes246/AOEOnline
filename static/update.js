@@ -53,9 +53,9 @@ function findNearestEnemy(u) {
         });
     }
 
-    // Check enemy buildings (only town_centers / building types)
+    // Check enemy buildings (town_center / building / mine)
     for (const o of (mapObjects || [])) {
-      if (!(o.kind === 'town_center' || o.type === 'building')) continue;
+      if (!(o.kind === 'town_center' || o.type === 'building' || o.kind === 'mine')) continue;
       if (o.owner === mySid) continue; // don't attack own buildings
       const dist = Math.hypot(u.x - o.x, u.y - o.y);
       if (dist < nearestDist) {
@@ -349,7 +349,7 @@ if (!u.manualMove) {
           const dx = enemyUnit.x - u.x;
           const dy = enemyUnit.y - u.y;
           const dist = Math.hypot(dx, dy);
-          if (dist > AGGRO_LOSE_RADIUS) u.targetEnemy = null;
+          if (dist > AGGRO_LOSE_RADIUS && !u.targetEnemy.userIssued) u.targetEnemy = null;
         }
       }
     } else if (u.targetEnemy.kind === 'entity') {
@@ -366,7 +366,7 @@ if (!u.manualMove) {
         const ch = (ent.meta && ent.meta.ch) ? ent.meta.ch : (ent.meta && ent.meta.h ? ent.meta.h : BUILD_H);
         const entRadius = Math.max(cw, ch) / 2;
         const effectiveDist = Math.max(0, dist - entRadius);
-        if (effectiveDist > AGGRO_LOSE_RADIUS) u.targetEnemy = null;
+        if (effectiveDist > AGGRO_LOSE_RADIUS && !u.targetEnemy.userIssued) u.targetEnemy = null;
       }
     }
   }
