@@ -12,7 +12,9 @@
     top:10px; left:10px;
     color:white;
     font-family:monospace;
-    background:rgba(0,0,0,0.5);
+      const stats = (typeof getUnitStats === "function") ? getUnitStats(u) : { maxHp: UNIT_MAX_HEALTH };
+      u.maxHp = stats.maxHp || UNIT_MAX_HEALTH;
+      if (typeof u.hp !== "number") u.hp = u.maxHp; // initialize if missing
     padding:6px;
   }
   #panel {
@@ -20,7 +22,7 @@
     bottom:20px;
     left:20px;
     width:220px;
-    height:120px;
+    height:180px;
     background:rgba(30,30,30,0.85);
     border:2px solid #888;
     padding:10px;
@@ -40,17 +42,20 @@
   }
   #buildBtn:hover { background:#666; }
   #buildBtn:disabled { background:#222; color:#777; cursor:not-allowed; }
-    #mineBtn {
-      width:100%;
-      height:40px;
-      margin-top:10px;
-      background:#444;
-      color:white;
-      border:1px solid #aaa;
-      cursor:pointer;
-    }
-    #mineBtn:hover { background:#666; }
-    #mineBtn:disabled { background:#222; color:#777; cursor:not-allowed; }
+  #mineBtn,
+  #blacksmithBtn {
+    width:100%;
+    height:40px;
+    margin-top:10px;
+    background:#444;
+    color:white;
+    border:1px solid #aaa;
+    cursor:pointer;
+  }
+  #mineBtn:hover,
+  #blacksmithBtn:hover { background:#666; }
+  #mineBtn:disabled,
+  #blacksmithBtn:disabled { background:#222; color:#777; cursor:not-allowed; }
   </style>
   </head>
 
@@ -62,6 +67,7 @@
     <div>Unit Selected</div>
     <button id="buildBtn">Place Town Center</button>
     <button id="mineBtn">Place Mine</button>
+    <button id="blacksmithBtn">Place Blacksmith</button>
   </div>
 
   <div id="buildingPanel" style="display:none; position:fixed; bottom:20px; left:20px; width:220px; height:120px; background:rgba(30,30,30,0.85); border:2px solid #888; padding:10px; color:white; font-family:monospace;">
@@ -82,6 +88,7 @@
     position:fixed;
     right:10px;
     bottom:10px;
+    left:auto;
     width:240px;
     background:rgba(0,0,0,0.75);
     color:white;
@@ -112,11 +119,16 @@
     display:none;
     position:fixed;
     left:20px;
-    bottom:160px;
+    right:20px;
+    top:20px;
+    bottom:20px;
     width:320px;
-    background:rgba(0,0,0,0.85);
+    max-width:460px;
+    max-height:calc(100vh - 40px);
+    overflow:auto;
+    background:rgba(0,0,0,0.9);
     color:white;
-    padding:12px;
+    padding:16px;
     border-radius:10px;
     border:2px solid #777;
     font-family:monospace;
@@ -261,6 +273,7 @@
   let resourceCounts = { red: 0, green: 0, blue: 0 };
   window.resourceCounts = resourceCounts;
   let hoveredResource = null;
+  let hoveredGroundItem = null;
   let hoveredPlayerSid = null;
   let hoveredAttackEntity = null;
   let dragMouse = {x:0,y:0};
@@ -271,8 +284,23 @@
   let localBuildingPlaced = false;
     let mineMode = false;
     let localMinePlaced = false;
+    let blacksmithMode = false;
+    let localBlacksmithPlaced = false;
   const socket = io({autoConnect: false});
   socket.on("server_debug", (data) => { try { console.log("SERVER_DEBUG:", data.msg); } catch(e){} });
+  socket.on("smith_upgrade_result", (data) => {
+    try { console.log("SMITH_RESULT", data); } catch(e){}
+    if (!data) return;
+    const msg = data.success
+      ? `Blacksmith upgraded item to +${data.bonus || 0}`
+      : (data.error || "Blacksmith upgrade failed");
+    // Optional inline feedback could be added here (no popups by request)
+    // Refresh inspector if this is the currently viewed entity
+    if (data.entityId && selectedEntityId === data.entityId) {
+      const updated = (mapObjects || []).find(x => x.id === data.entityId);
+      if (updated) openEntityInspector(updated);
+    }
+  });
   // Building image and default size (needed by static/draw.js)
   const BUILD_W = 256;
   const BUILD_H = 256;
@@ -283,6 +311,10 @@
   const MINE_H = 256;
   const mineImg = new Image();
   mineImg.src = "static/tiles/mine.png";
+  const BLACKSMITH_W = 256;
+  const BLACKSMITH_H = 256;
+  const blacksmithImg = new Image();
+  blacksmithImg.src = "static/tiles/blacksmith.png";
   // Client-side per-town-center population limit (used for HUD cap calculation)
   const POP_LIMIT = 10;
   // How many town centers a player may place
@@ -303,6 +335,7 @@
   const panel = document.getElementById("panel");
   const buildBtn = document.getElementById("buildBtn");
   const mineBtn = document.getElementById("mineBtn");
+  const blacksmithBtn = document.getElementById("blacksmithBtn");
 
   function updateBuildButton() {
     if (!buildBtn) return;
@@ -319,6 +352,14 @@
     mineBtn.innerText = `Place Mine (Cost: ${mineCost} blue)`;
     mineBtn.disabled = ((resourceCounts.blue || 0) < mineCost);
     mineBtn.title = `Cost: ${mineCost} blue resources`;
+  }
+
+  function updateBlacksmithButton() {
+    if (!blacksmithBtn) return;
+    const smithCost = 3;
+    blacksmithBtn.innerText = `Place Blacksmith (Cost: ${smithCost} red)`;
+    blacksmithBtn.disabled = ((resourceCounts.red || 0) < smithCost);
+    blacksmithBtn.title = `Cost: ${smithCost} red resources`;
   }
 
   // Entity inspector elements (used by openEntityInspector / input handlers)
@@ -340,6 +381,7 @@
       if (entityPanelEl) entityPanelEl.style.display = "none";
       selectedEntityId = null;
       try { if (window.__mineCountdownTimer) { clearInterval(window.__mineCountdownTimer); window.__mineCountdownTimer = null; } } catch(e){}
+      try { if (window.__smithCountdownTimer) { clearInterval(window.__smithCountdownTimer); window.__smithCountdownTimer = null; } } catch(e){}
     };
   }
 
@@ -414,6 +456,21 @@
   const GROUND_ITEM_SIZE = 32;
   const PICKUP_RADIUS = 26;
 
+  function itemStatText(item) {
+    const n = (typeof item === "string" ? item : (item && item.name) || "").toLowerCase();
+    const bonusRaw = (item && typeof item === "object") ? Number(item.bonus || 0) : 0;
+    const bonus = Math.max(0, isNaN(bonusRaw) ? 0 : bonusRaw);
+    if (n === "sword") {
+      const atk = 1 + bonus;
+      return `+${atk} Attack (+${atk * 5} DPS)`;
+    }
+    if (n === "shield") {
+      const def = 1 + bonus;
+      return `+${def} Defense (+${def * 15} HP)`;
+    }
+    return "";
+  }
+
   const PICKUP_DISTANCE = 120; // how close unit must be to pick up from ground
   let currentItemsUnitId = null; // which unit's equipment UI is currently showing
 
@@ -465,7 +522,12 @@
       li.dataset.unitId = unit.id;
 
       const left = document.createElement("div");
-      left.textContent = `Slot ${i + 1}: ${slot ? slot.name : "(empty)"}`;
+      const statText = slot ? itemStatText(slot) : "";
+      const hoverText = slot
+        ? `${slot.name || "item"}${statText ? " — " + statText : ""}`
+        : "Empty slot";
+      left.textContent = `Slot ${i + 1}: ${slot ? slot.name : "(empty)"}${slot && typeof slot.bonus !== "undefined" ? ` (+${Math.max(0, Number(slot.bonus) || 0)})` : ""}`;
+      li.title = hoverText;
       li.appendChild(left);
 
       // Allow dropping from ground -> slot OR slot -> slot
@@ -545,6 +607,7 @@
       if (slot) {
         const chip = document.createElement("div");
         chip.textContent = "drag";
+        chip.title = hoverText;
         chip.style.padding = "3px 8px";
         chip.style.border = "1px solid #aaa";
         chip.style.borderRadius = "6px";
@@ -756,7 +819,8 @@
           li.style.border = "1px solid #666";
           li.style.borderRadius = "4px";
           li.style.background = s ? "rgba(255,255,255,0.06)" : "transparent";
-          li.title = s ? (s.name || "item") : `(empty)`;
+          const statTxt = s ? itemStatText(s) : "";
+          li.title = s ? ((s.name || "item") + (statTxt ? " — " + statTxt : "")) : `(empty)`;
           const dot = document.createElement("div");
           dot.style.width = "22px";
           dot.style.height = "22px";
@@ -768,6 +832,7 @@
           dot.style.fontSize = "11px";
           dot.style.color = "#000";
           dot.textContent = s ? (s.name ? s.name[0].toUpperCase() : "I") : "";
+          dot.title = s ? (statTxt || "") : "";
           li.appendChild(dot);
           li._dot = dot;
         } else {
@@ -778,7 +843,9 @@
           li.style.padding = "6px";
           li.style.marginBottom = "6px";
           const left = document.createElement("div");
-          left.textContent = `Slot ${si+1}: ${s ? s.name : "(empty)"}`;
+          const statSuffix = s ? itemStatText(s) : "";
+          const bonusLabel = s && typeof s.bonus !== "undefined" ? ` (+${Math.max(0, Number(s.bonus) || 0)})` : "";
+          left.textContent = `Slot ${si+1}: ${s ? s.name : "(empty)"}${bonusLabel}${statSuffix ? " (" + statSuffix + ")" : ""}`;
           li.appendChild(left);
         }
 
@@ -806,6 +873,7 @@
         if (s) {
           const chip = document.createElement("div");
           chip.textContent = s.name || "item";
+          chip.title = itemStatText(s) || "";
           chip.style.padding = "3px 8px";
           chip.style.border = "1px solid #aaa";
           chip.style.borderRadius = "6px";
@@ -933,6 +1001,57 @@
           // Read from mapObjects to get fresh data on each tick, not stale closure
           try { if (window.__mineCountdownTimer) clearInterval(window.__mineCountdownTimer); } catch(e){}
           window.__mineCountdownTimer = setInterval(updateMineTimer, 1000);
+
+          abilitiesEl.appendChild(wrap);
+        }
+
+        // Blacksmith ability: upgrade the slotted item for 3 blue
+        const isBlacksmith = (o.kind === "blacksmith");
+        if (isBlacksmith) {
+          const wrap = document.createElement("div");
+          wrap.style.display = "flex";
+          wrap.style.flexDirection = "column";
+          wrap.style.gap = "6px";
+
+          const owned = !!o.owner && o.owner === mySid;
+          const smithSlots = o.itemSlots || [];
+          const smithItem = smithSlots[0] || null;
+          const bonusVal = smithItem ? Math.max(0, Number(smithItem.bonus) || 0) : 0;
+
+          const label = document.createElement("div");
+          label.textContent = smithItem
+            ? `Slot 1: ${smithItem.name || "item"} (bonus +${bonusVal})`
+            : "Slot 1: (empty)";
+          label.title = smithItem ? itemStatText(smithItem) : "Drag an item into the Blacksmith's slot";
+          wrap.appendChild(label);
+
+          const hint = document.createElement("div");
+          hint.style.fontSize = "12px";
+          hint.style.opacity = "0.8";
+          hint.textContent = "Use the Items section above to drop an item into this Blacksmith.";
+          wrap.appendChild(hint);
+
+          const btn = document.createElement("button");
+          btn.textContent = "Upgrade item (cost: 3 blue)";
+          btn.style.height = "30px";
+          const hasBlue = (resourceCounts.blue || 0) >= 3;
+          const hasItem = !!smithItem;
+          btn.disabled = !owned || !hasItem || !hasBlue;
+          if (!owned) {
+            btn.title = "You do not own this building";
+            btn.style.opacity = "0.6";
+          } else if (!hasItem) {
+            btn.title = "Place an item into the Blacksmith slot first";
+            btn.style.opacity = "0.8";
+          } else if (!hasBlue) {
+            btn.title = "Requires 3 blue resources";
+            btn.style.opacity = "0.8";
+          }
+          btn.onclick = () => {
+            if (!owned || !hasItem || !hasBlue) return;
+            socket.emit("smith_upgrade_item", { entityId: o.id, slotIndex: 0 });
+          };
+          wrap.appendChild(btn);
 
           abilitiesEl.appendChild(wrap);
         }
@@ -1163,6 +1282,7 @@
         anim: su0.anim || "idle",
         dir: String(su0.dir ?? "000").padStart(3,"0"),
         hp: (su0.hp ?? existing?.hp ?? UNIT_MAX_HEALTH),
+          maxHp: (su0.maxHp ?? existing?.maxHp ?? UNIT_MAX_HEALTH),
         tx:   (su0.tx ?? su0.x),
         ty:   (su0.ty ?? su0.y),
       };
@@ -1190,6 +1310,7 @@
         lu.x = su.x; lu.y = su.y;
         lu.tx = su.tx; lu.ty = su.ty;
         lu.hp = su.hp;
+        lu.maxHp = su.maxHp;
         lu.dir = su.dir;
 
         if (lu.anim !== su.anim) {
@@ -1307,7 +1428,7 @@
       resourceCounts = me.resources || { red: 0, green: 0, blue: 0 };
       window.resourceCounts = resourceCounts;
     }
-    try { updateBuildButton(); updateMineButton(); } catch (e) {}
+    try { updateBuildButton(); updateMineButton(); updateBlacksmithButton(); } catch (e) {}
 
     for (const sid in players){
             const first = players[sid].units[0];
@@ -1351,13 +1472,14 @@
 
       
 
-  socket.on("unit_hp_update", ({ sid, unitId, hp }) => {
+    socket.on("unit_hp_update", ({ sid, unitId, hp, maxHp }) => {
       const list = sid === mySid ? myUnits : players[sid]?.units;
       if (!list) return;
       const u = list.find(u => u.id === unitId);
       if (!u) return;
 
       u.hp = hp;
+      if (typeof maxHp === 'number') u.maxHp = maxHp;
 
       if (u.hp <= 0) {
           // remove locally
@@ -1444,6 +1566,17 @@
 
     u.itemSlots = itemSlots;
 
+    // Recompute derived stats locally for immediate UI feedback
+    if (typeof getUnitStats === "function") {
+      const stats = getUnitStats(u);
+      u.maxHp = stats.maxHp;
+      if (typeof u.hp === 'number') {
+        u.hp = Math.min(u.hp, u.maxHp);
+      } else {
+        u.hp = u.maxHp;
+      }
+    }
+
     // refresh UI if currently showing this unit
     if (currentItemsUnitId === unitId) renderUnitItems(u);
   });
@@ -1461,7 +1594,7 @@
       }
     }
     // update build button count/limit
-    try { updateBuildButton(); updateMineButton(); } catch(e){}
+    try { updateBuildButton(); updateMineButton(); updateBlacksmithButton(); } catch(e){}
   });
 
   // Update entity HP when server reports damage

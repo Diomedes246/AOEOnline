@@ -34,6 +34,33 @@ function getUnitTargetOffset(idx, total) {
 const CHASE_SPEED = 2.0;   // speed when auto-chasing enemies/buildings
 const HARVEST_SPEED = 3.8; // speed when moving to harvest resources
 
+// Item-driven stat bonuses (keep in sync with server)
+const DPS_PER_ATTACK_POINT = 5;   // sword = +1 attack
+const HP_PER_DEFENSE_POINT = 15;  // shield = +1 defense
+
+function getUnitStats(u) {
+  const slots = (u && u.itemSlots) || [];
+  let attack = 0;
+  let defense = 0;
+
+  for (const s of slots) {
+    if (!s || !s.name) continue;
+    const name = String(s.name).toLowerCase();
+    if (name === "sword") attack += 1;
+    else if (name === "shield") defense += 1;
+  }
+
+  const baseHp = typeof UNIT_MAX_HEALTH === "number" ? UNIT_MAX_HEALTH : 100;
+  const baseDps = typeof UNIT_ATTACK_DPS === "number" ? UNIT_ATTACK_DPS : 30;
+
+  return {
+    attack,
+    defense,
+    maxHp: baseHp + defense * HP_PER_DEFENSE_POINT,
+    dps: baseDps + attack * DPS_PER_ATTACK_POINT
+  };
+}
+
 function findNearestEnemy(u) {
     let nearest = null;
     let nearestDist = Infinity;
@@ -237,6 +264,15 @@ function update(){
             continue;
         }
 
+        // Keep derived stats (maxHp/dps) in sync client-side
+        const stats = getUnitStats(u);
+        if (stats) {
+          u.maxHp = stats.maxHp;
+          if (typeof u.hp === "number") {
+            u.hp = Math.min(u.hp, u.maxHp);
+          }
+        }
+
           // --- Manual move ---
   if(u.manualMove){
       // Prefer a stable formation index assigned when the move was issued
@@ -406,10 +442,12 @@ if (!u.manualMove) {
           } else {
             u.anim = "attack";
             if (u.attackCooldown >= ATTACK_COOLDOWN) {
+              const dmgPerTick = (stats?.dps ?? UNIT_ATTACK_DPS) / 60;
               socket.emit("attack_unit", {
                 targetSid: u.targetEnemy.sid,
                 unitId: u.targetEnemy.unitId,
-                damage: UNIT_ATTACK_DPS / 60
+                damage: dmgPerTick,
+                attackerId: u.id
               });
               u.attackCooldown = 0;
             }
@@ -461,9 +499,11 @@ if (!u.manualMove) {
           } else {
             u.anim = "attack";
             if (u.attackCooldown >= ATTACK_COOLDOWN) {
+              const dmgPerTick = (stats?.dps ?? UNIT_ATTACK_DPS) / 60;
               socket.emit("attack_entity", {
                 entityId: u.targetEnemy.entityId,
-                damage: UNIT_ATTACK_DPS / 60
+                damage: dmgPerTick,
+                attackerId: u.id
               });
               u.attackCooldown = 0;
             }
@@ -504,7 +544,8 @@ const unitStates = myUnits.map(u => ({
     ty: u.ty,
     anim: u.anim,
     dir: u.dir,
-    hp: u.hp
+  hp: u.hp,
+  maxHp: u.maxHp
 }));
     socket.emit("update_units", { units: unitStates });
 }

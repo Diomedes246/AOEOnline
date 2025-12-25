@@ -269,9 +269,14 @@ for (const obj of worldRenderables) {
         const hbar = 8;
         const bx = sx - Math.min(120, wbar) / 2;
         const by = sy - (obj.meta?.h ?? def.h) / 2 - 30; // higher to leave gap above progress bar
+        const maxHp = obj.maxHp
+          ?? obj.meta?.maxHp
+          ?? (obj.kind === 'town_center' ? 500
+              : (obj.kind === 'mine' ? 300
+                  : (obj.kind === 'blacksmith' ? 300 : 200)));
         ctx.fillStyle = 'rgba(0,0,0,0.6)';
         ctx.fillRect(bx, by, Math.min(120, wbar), hbar);
-        const pct = Math.max(0, Math.min(1, (hp / (obj.meta?.maxHp || 500))));
+        const pct = Math.max(0, Math.min(1, (hp / maxHp)));
         ctx.fillStyle = (obj.kind === 'house') ? '#4CAF50' : 'red';
         ctx.fillRect(bx, by, Math.min(120, wbar) * pct, hbar);
         ctx.strokeStyle = 'white';
@@ -302,9 +307,15 @@ for (const obj of worldRenderables) {
         const bx = sx - barW/2;
         const by = sy - BUILD_H/2 - 18;
 
+        const maxHp = obj.maxHp
+          ?? obj.meta?.maxHp
+          ?? (obj.kind === 'town_center' ? 500
+              : (obj.kind === 'mine' ? 300
+                  : (obj.kind === 'blacksmith' ? 300 : 200)));
+
         ctx.fillStyle = 'rgba(0,0,0,0.6)';
         ctx.fillRect(bx, by, barW, barH);
-        const pct = Math.max(0, Math.min(1, (hp / (obj.meta?.maxHp || 500))));
+        const pct = Math.max(0, Math.min(1, (hp / maxHp)));
         ctx.fillStyle = (obj.kind === 'house') ? '#4CAF50' : 'red';
         ctx.fillRect(bx, by, barW * pct, barH);
         ctx.strokeStyle = 'white';
@@ -469,10 +480,14 @@ for (const item of unitRenderables) {
   if (img && img.complete) ctx.drawImage(img, sx - SPRITE_W/2, sy - SPRITE_H/2, SPRITE_W, SPRITE_H);
 
   // HP bar
+  const computedStats = (typeof getUnitStats === "function") ? getUnitStats(u) : null;
+  const maxHp = u.maxHp || computedStats?.maxHp || UNIT_MAX_HEALTH || 100;
+  const hpVal = (typeof u.hp === "number") ? u.hp : maxHp;
+  const hpRatio = Math.max(0, Math.min(1, maxHp > 0 ? (hpVal / maxHp) : 0));
   ctx.fillStyle = "red";
   ctx.fillRect(sx - 20, sy - 30, 40, 5);
   ctx.fillStyle = "green";
-  ctx.fillRect(sx - 20, sy - 30, 40 * ((u.hp ?? 100) / 100), 5);
+  ctx.fillRect(sx - 20, sy - 30, 40 * hpRatio, 5);
 
   // selection ring
   if (isMine && u.selected) {
@@ -567,6 +582,22 @@ for (const item of unitRenderables) {
     ctx.globalAlpha = 1;
   }
 
+  // Blacksmith placement preview (mirrors mine ghost)
+  if (blacksmithMode) {
+    ctx.globalAlpha = 0.5;
+    const wx = camera.x + mouse.x - canvas.width / 2;
+    const wy = camera.y + mouse.y - canvas.height / 2;
+    const mx = canvas.width / 2 + wx - camera.x;
+    const my = canvas.height / 2 + wy - camera.y;
+    if (blacksmithImg && blacksmithImg.complete && blacksmithImg.naturalWidth > 0) {
+      ctx.drawImage(blacksmithImg, mx - BLACKSMITH_W / 2, my - BLACKSMITH_H / 2, BLACKSMITH_W, BLACKSMITH_H);
+    } else {
+      ctx.strokeStyle = "white";
+      ctx.strokeRect(mx - BLACKSMITH_W / 2, my - BLACKSMITH_H / 2, BLACKSMITH_W, BLACKSMITH_H);
+    }
+    ctx.globalAlpha = 1;
+  }
+
   // Selection box
   if (selecting) {
     ctx.strokeStyle = "white";
@@ -618,6 +649,33 @@ for (const it of visibleItems) {
   ctx.font = "12px monospace";
   ctx.textAlign = "center";
   ctx.fillText(it.name, sx, sy - 22);
+
+  // Hover tooltip for ground item stats
+  if (hoveredGroundItem && hoveredGroundItem.id === it.id) {
+    const statTxt = itemStatText ? itemStatText(it.name) : "";
+    if (statTxt) {
+      const tip = statTxt;
+      ctx.font = "11px monospace";
+      const tw = ctx.measureText(tip).width + 12;
+      const th = 16;
+      const tx = sx - tw / 2;
+      const ty = sy - 42;
+
+      ctx.fillStyle = "rgba(0,0,0,0.7)";
+      ctx.fillRect(tx, ty - th, tw, th);
+      ctx.strokeStyle = "#0ff";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(tx, ty - th, tw, th);
+
+      ctx.fillStyle = "#0ff";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(tip, sx, ty - th / 2);
+
+      // reset baseline for downstream text
+      ctx.textBaseline = "alphabetic";
+    }
+  }
 
   // show pickup range indicator if a selected unit is near enough
   if (picker && unitCanPickup(picker, it)) {

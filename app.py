@@ -18,6 +18,13 @@ mine_loop_lock = Lock()
 # Cost constants
 TOWN_CENTER_COST = 5
 
+# Combat/stat tuning
+BASE_UNIT_HP = 100
+BASE_UNIT_DPS = 30
+DPS_PER_ATTACK_POINT = 5   # sword grants +1 attack -> +5 DPS
+HP_PER_DEFENSE_POINT = 15  # shield grants +1 defense -> +15 HP
+TICKS_PER_SECOND = 60.0
+
 GROUND_FILE = "ground_items.json"
 ground_lock = Lock()
 
@@ -53,17 +60,31 @@ def load_map():
             m["interval"] = interval
             m["nextTick"] = now + interval
             print(f"[LOAD_MAP] Reset mine {o.get('id')} nextTick to {m['nextTick']} interval={interval}", flush=True)
+
+        if o.get("kind") == "blacksmith":
+            # Normalize blacksmiths to ensure they act as entities with HP and at least one item slot
+            m = o.setdefault("meta", {})
+            m["entity"] = True
+            if "interval" in m:
+                # legacy fields not used by blacksmith anymore
+                m.pop("interval", None)
+                m.pop("nextTick", None)
+            slots = o.setdefault("itemSlots", [])
+            if len(slots) == 0:
+                slots.append(None)
     
     # Ensure entities that need HP bars have them set
     for o in map_objects:
         if o.get("meta", {}).get("entity"):
             # town_center, building, and mine all need HP bars
-            if o.get("kind") in ("town_center", "building", "mine"):
+            if o.get("kind") in ("town_center", "building", "mine", "blacksmith"):
                 if o.get("hp") is None:
                     # default HP by kind
                     if o.get("kind") == "town_center":
                         o["hp"] = 500
                     elif o.get("kind") == "mine":
+                        o["hp"] = 300
+                    elif o.get("kind") == "blacksmith":
                         o["hp"] = 300
                     else:
                         o["hp"] = 200
@@ -157,6 +178,68 @@ def make_default_slots():
         None,
         None
     ]
+
+
+def compute_unit_stats(u):
+    slots = u.get("itemSlots") or []
+    attack_pts = 0
+    defense_pts = 0
+
+    for s in slots:
+        if not s or not isinstance(s, dict):
+            continue
+        name = s.get("name", "").lower()
+        bonus = 0
+        try:
+            bonus = int(s.get("bonus", 0))
+        except Exception:
+            bonus = 0
+        bonus = max(0, bonus)
+        if name == "sword":
+            attack_pts += 1 + bonus
+        elif name == "shield":
+            defense_pts += 1 + bonus
+
+    max_hp = BASE_UNIT_HP + defense_pts * HP_PER_DEFENSE_POINT
+    dps = BASE_UNIT_DPS + attack_pts * DPS_PER_ATTACK_POINT
+
+    return {
+        "attack": attack_pts,
+        "defense": defense_pts,
+        "max_hp": max_hp,
+        "dps": dps
+    }
+
+
+def apply_unit_stats(u, owner_sid=None, broadcast_hp=False):
+    """Recompute derived stats (maxHp/dps) from items and optionally broadcast HP."""
+    stats = compute_unit_stats(u)
+
+    old_max = float(u.get("maxHp", BASE_UNIT_HP))
+    old_hp = float(u.get("hp", BASE_UNIT_HP))
+
+    u["attackStat"] = stats["attack"]
+    u["defenseStat"] = stats["defense"]
+    u["maxHp"] = stats["max_hp"]
+    u["dps"] = stats["dps"]
+
+    # If max HP increased, grant the difference (up to new max). If decreased, clamp.
+    if stats["max_hp"] > old_max:
+        new_hp = min(stats["max_hp"], old_hp + (stats["max_hp"] - old_max))
+    else:
+        new_hp = min(old_hp, stats["max_hp"])
+
+    u["hp"] = new_hp
+
+    if broadcast_hp and owner_sid and u.get("id"):
+        socketio.emit("unit_hp_update", {
+            "sid": owner_sid,
+            "unitId": u["id"],
+            "hp": u["hp"],
+            "maxHp": u["maxHp"]
+        })
+
+    return u
 
 # Add global state for trees
 trees = []
@@ -290,6 +373,16 @@ def place_map_object(data):
                 "color": "#fff"
             }
 
+    if kind == "blacksmith":
+        player = players.get(sid)
+        smith_cost = 3
+        # check red resource
+        if not player or player.get("resources", {}).get("red", 0) < smith_cost:
+            socketio.emit("server_debug", {"msg": f"Not enough red resources to build Blacksmith (requires {smith_cost})"}, to=sid)
+            return
+        player.setdefault("resources", {"red":0,"green":0,"blue":0})
+        player["resources"]["red"] = max(0, player["resources"].get("red", 0) - smith_cost)
+
     with map_lock:
         obj = {
             "id": data.get("id") or str(uuid.uuid4()),
@@ -311,14 +404,24 @@ def place_map_object(data):
             mine_meta.setdefault("resource", "red")
             m.setdefault("interval", 30)
             m.setdefault("nextTick", time.time() + int(m.get("interval", 30)))
+        if obj.get("kind") == "blacksmith":
+            m = obj.setdefault("meta", {})
+            m["entity"] = True
+            # ensure legacy timer fields are not set
+            m.pop("interval", None)
+            m.pop("nextTick", None)
+            if not obj.get("itemSlots"):
+                obj["itemSlots"] = [None]
         # If this is a building entity, ensure it has HP; other entities are invulnerable by default
-        if obj.get("meta", {}).get("entity") and (obj.get("type") == "building" or obj.get("kind") in ["town_center", "mine"]):
+        if obj.get("meta", {}).get("entity") and (obj.get("type") == "building" or obj.get("kind") in ["town_center", "mine", "blacksmith"]):
             if data.get("hp") is not None:
                 obj["hp"] = float(data.get("hp"))
             else:
                 if obj.get("kind") == "town_center":
                     obj["hp"] = 500
                 elif obj.get("kind") == "mine":
+                    obj["hp"] = 300
+                elif obj.get("kind") == "blacksmith":
                     obj["hp"] = 300
                 else:
                     obj["hp"] = 200
@@ -408,12 +511,13 @@ def on_connect():
             "id": str(uuid.uuid4()),
             "x": 0, "y": 0,
             "tx": 0, "ty": 0,
-            "hp": 100,
+            "hp": BASE_UNIT_HP,
             "anim": "idle",
             "dir": "000",
             "itemSlots": make_default_slots()
         }]
     }
+    apply_unit_stats(players[sid]["units"][0], owner_sid=sid, broadcast_hp=False)
     # initialize resource count for this player
     # per-type resource counts
     players[sid]["resources"] = {"red": 0, "green": 0, "blue": 0}
@@ -495,11 +599,13 @@ def spawn_unit(data):
         "y": unit.get("y", 0),
         "tx": unit.get("tx", unit.get("x", 0)),
         "ty": unit.get("ty", unit.get("y", 0)),
-        "hp": unit.get("hp", 100),
+        "hp": unit.get("hp", BASE_UNIT_HP),
         "anim": unit.get("anim", "idle"),
         "dir": unit.get("dir", "000"),
         "itemSlots": make_default_slots()
     }
+
+    apply_unit_stats(new_unit, owner_sid=sid, broadcast_hp=False)
 
     players[sid]["units"].append(new_unit)
     socketio.emit("update_units", {"sid": sid, "units": players[sid]["units"]})
@@ -582,12 +688,14 @@ def spawn_unit_from_entity(data):
         "y": ey + oy,
         "tx": ex + ox,
         "ty": ey + oy,
-        "hp": 100,
+        "hp": BASE_UNIT_HP,
         "anim": "idle",
         "dir": "000",
         "itemSlots": make_default_slots(),
         "spawnedFrom": entity_id
     }
+
+    apply_unit_stats(new_unit, owner_sid=sid, broadcast_hp=False)
 
     # Deduct green resource cost (server-authoritative)
     try:
@@ -631,10 +739,14 @@ def on_drop_item(data):
     slots[slot_index] = None
     u["itemSlots"] = slots
 
+    # Recompute stats after unequip
+    apply_unit_stats(u, owner_sid=sid, broadcast_hp=True)
+
     # create ground item
     gi = {
         "id": str(uuid.uuid4()),
         "name": item.get("name", "item"),
+        "bonus": item.get("bonus", 0),
         "x": float(x),
         "y": float(y)
     }
@@ -697,9 +809,13 @@ def on_pickup_item(data):
     # equip
     slots[slot_index] = {
         "id": str(uuid.uuid4()),
-        "name": gi.get("name", "item")
+        "name": gi.get("name", "item"),
+        "bonus": gi.get("bonus", 0)
     }
     u["itemSlots"] = slots
+
+    # Recompute stats after equip
+    apply_unit_stats(u, owner_sid=sid, broadcast_hp=True)
 
     # ✅ broadcast new ground list to everyone
     socketio.emit("ground_items", ground_items)
@@ -766,11 +882,21 @@ def on_collect_resource(data):
 def handle_attack_unit(data):
     target_sid = data.get("targetSid")
     target_id  = data.get("unitId")
+    attacker_id = data.get("attackerId")
 
-    try:
-        damage = float(data.get("damage", 0))
-    except (TypeError, ValueError):
-        return
+    # Recompute damage server-side based on attacker's items
+    damage = None
+    if attacker_id:
+        attacker = find_unit(request.sid, attacker_id)
+        if attacker:
+            stats = compute_unit_stats(attacker)
+            damage = stats["dps"] / TICKS_PER_SECOND
+
+    if damage is None:
+        try:
+            damage = float(data.get("damage", 0))
+        except (TypeError, ValueError):
+            return
 
     if not target_sid or target_sid not in players:
         return
@@ -801,10 +927,20 @@ def handle_attack_unit(data):
 def handle_attack_entity(data):
     # data: { entityId, damage }
     entity_id = data.get("entityId")
-    try:
-        damage = float(data.get("damage", 0))
-    except (TypeError, ValueError):
-        return
+    attacker_id = data.get("attackerId")
+
+    damage = None
+    if attacker_id:
+        attacker = find_unit(request.sid, attacker_id)
+        if attacker:
+            stats = compute_unit_stats(attacker)
+            damage = stats["dps"] / TICKS_PER_SECOND
+
+    if damage is None:
+        try:
+            damage = float(data.get("damage", 0))
+        except (TypeError, ValueError):
+            return
 
     if not entity_id:
         return
@@ -996,8 +1132,12 @@ def handle_ground_give_to_entity(data):
             socketio.emit("server_debug", {"msg": "ground_give_to_entity: entity slot occupied"}, to=sid)
             return
 
-        # transfer ground item into entity slot
-        eslots[entity_slot_index] = {"id": str(uuid.uuid4()), "name": gi.get("name")}
+        # transfer ground item into entity slot, preserving any upgrade bonus
+        eslots[entity_slot_index] = {
+            "id": str(uuid.uuid4()),
+            "name": gi.get("name"),
+            "bonus": gi.get("bonus", 0)
+        }
         ent["itemSlots"] = eslots
 
     # remove ground item
@@ -1015,6 +1155,85 @@ def handle_ground_give_to_entity(data):
     # notify clients
     socketio.emit("map_objects", map_objects)
     socketio.emit("ground_items", ground_items)
+
+
+@socketio.on("smith_upgrade_item")
+def handle_smith_upgrade_item(data):
+    sid = request.sid
+    entity_id = data.get("entityId")
+    try:
+        slot_index = int(data.get("slotIndex", 0))
+    except Exception:
+        slot_index = 0
+
+    cost_blue = 3
+
+    p = players.get(sid)
+    if not p:
+        socketio.emit("smith_upgrade_result", {"entityId": entity_id, "success": False, "error": "Player not found"}, to=sid)
+        socketio.emit("server_debug", {"msg": "Player not found for smith upgrade"}, to=sid)
+        return
+    if p.get("resources", {}).get("blue", 0) < cost_blue:
+        socketio.emit("smith_upgrade_result", {"entityId": entity_id, "success": False, "error": "Not enough blue (3)"}, to=sid)
+        socketio.emit("server_debug", {"msg": "Not enough blue resources to upgrade item (requires 3)"}, to=sid)
+        return
+
+    with map_lock:
+        ent = next((m for m in map_objects if m.get("id") == entity_id), None)
+        if not ent:
+            socketio.emit("smith_upgrade_result", {"entityId": entity_id, "success": False, "error": "Blacksmith not found"}, to=sid)
+            socketio.emit("server_debug", {"msg": "Blacksmith not found"}, to=sid)
+            return
+        if ent.get("kind") != "blacksmith":
+            socketio.emit("smith_upgrade_result", {"entityId": entity_id, "success": False, "error": "Upgrade allowed only on blacksmith"}, to=sid)
+            socketio.emit("server_debug", {"msg": "Upgrade allowed only on blacksmith"}, to=sid)
+            return
+        if ent.get("owner") and ent.get("owner") != sid:
+            socketio.emit("smith_upgrade_result", {"entityId": entity_id, "success": False, "error": "Only the owner can use this blacksmith"}, to=sid)
+            socketio.emit("server_debug", {"msg": "Only the owner can use this blacksmith"}, to=sid)
+            return
+
+        slots = ent.get("itemSlots") or []
+        # guarantee at least one slot so upgrades always have a target
+        if len(slots) == 0:
+            slots = [None]
+        if slot_index < 0 or slot_index >= len(slots):
+            socketio.emit("smith_upgrade_result", {"entityId": entity_id, "success": False, "error": "Blacksmith slot unavailable"}, to=sid)
+            socketio.emit("server_debug", {"msg": "Blacksmith slot unavailable"}, to=sid)
+            return
+        item = slots[slot_index]
+        if not item:
+            socketio.emit("smith_upgrade_result", {"entityId": entity_id, "success": False, "error": "Place an item into the blacksmith slot first"}, to=sid)
+            socketio.emit("server_debug", {"msg": "Place an item into the blacksmith slot first"}, to=sid)
+            return
+
+        # normalize legacy items that may be plain strings
+        if isinstance(item, str):
+            item = {"id": str(uuid.uuid4()), "name": item}
+        elif not isinstance(item, dict):
+            item = {"id": str(uuid.uuid4()), "name": str(item)}
+
+        # Deduct cost
+        p.setdefault("resources", {"red": 0, "green": 0, "blue": 0})
+        p["resources"]["blue"] = max(0, p["resources"].get("blue", 0) - cost_blue)
+
+        # Apply upgrade
+        try:
+            current_bonus = int(item.get("bonus", 0))
+        except Exception:
+            current_bonus = 0
+        current_bonus = max(0, current_bonus)
+        item["bonus"] = current_bonus + 1
+        slots[slot_index] = item
+        ent["itemSlots"] = slots
+        save_map()
+        new_bonus = item.get("bonus", 0)
+
+    # broadcast updated map and state (for resource counts)
+    socketio.emit("map_objects", map_objects)
+    emit_state()
+    socketio.emit("server_debug", {"msg": f"Upgraded item to bonus +{new_bonus}"}, to=sid)
+    socketio.emit("smith_upgrade_result", {"entityId": entity_id, "success": True, "bonus": new_bonus}, to=sid)
 
 
 @socketio.on("entity_give_to_unit")
@@ -1048,7 +1267,11 @@ def handle_entity_give_to_unit(data):
         if unit_slot_index >= len(uslots): return
         if uslots[unit_slot_index] is not None: return
         # transfer
-        uslots[unit_slot_index] = {"id": str(uuid.uuid4()), "name": item.get("name")}
+        uslots[unit_slot_index] = {
+            "id": str(uuid.uuid4()),
+            "name": item.get("name"),
+            "bonus": item.get("bonus", 0)
+        }
         u["itemSlots"] = uslots
         eslots[entity_slot_index] = None
         ent["itemSlots"] = eslots
@@ -1100,6 +1323,7 @@ def handle_entity_give_to_ground(data):
     gi = {
         "id": str(uuid.uuid4()),
         "name": item.get("name", "item"),
+        "bonus": item.get("bonus", 0),
         "x": float(x),
         "y": float(y)
     }

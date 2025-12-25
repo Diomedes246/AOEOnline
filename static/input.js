@@ -25,12 +25,16 @@ canvas.addEventListener("mousemove", e=>{
 
   hoveredResource = null;
   hoveredPlayerSid = null;
+  canvas.title = "";
 
     // Ground item hover (priority 0)
   hoveredGroundItem = null;
   for (const it of groundItems) {
     if (Math.hypot(it.x - wx, it.y - wy) < 18) {
       hoveredGroundItem = it;
+      const statTxt = itemStatText ? itemStatText(it.name) : "";
+      const label = it.name || "item";
+      canvas.title = statTxt ? `${label} — ${statTxt}` : label;
       canvas.style.cursor = "grab";
       break;
     }
@@ -338,6 +342,33 @@ socket.emit("place_map_object", { type, kind, x: wx, y: wy, meta });
         h: MINE_H
       };
       socket.emit("place_map_object", { type: "tile", kind: "mine", x: wx, y: wy, meta });
+      return;
+    }
+
+    // ===== Blacksmith placement =====
+    if (blacksmithMode && !localBlacksmithPlaced) {
+      const smithCost = 3;
+      try { console.log('SMITH: attempting placement'); } catch(e){}
+      if (((window.resourceCounts && window.resourceCounts.red) || 0) < smithCost) {
+        try { blacksmithMode = false; localBlacksmithPlaced = false; if (blacksmithBtn) blacksmithBtn.disabled = false; } catch(e){}
+        alert(`Not enough red resources to build Blacksmith (requires ${smithCost})`);
+        return;
+      }
+      localBlacksmithPlaced = true;
+      blacksmithMode = false;
+      try { if (blacksmithBtn) blacksmithBtn.disabled = true; } catch(e){}
+      const meta = {
+        entity: true,
+        title: "Blacksmith",
+        bio: "",
+        actions: [],
+        collides: true,
+        cw: BLACKSMITH_W,
+        ch: BLACKSMITH_H,
+        w: BLACKSMITH_W,
+        h: BLACKSMITH_H
+      };
+      socket.emit("place_map_object", { type: "tile", kind: "blacksmith", x: wx, y: wy, meta });
       return;
     }
 
@@ -901,6 +932,12 @@ document.addEventListener('click', (ev) => {
     if (!localMinePlaced) {
       mineMode = true;
       try { console.log('MINE: mineMode ON'); } catch(e){}
+    }
+  }
+  if (t.id === 'blacksmithBtn' || (t.closest && t.closest('#blacksmithBtn'))) {
+    if (!localBlacksmithPlaced) {
+      blacksmithMode = true;
+      try { console.log('SMITH: blacksmithMode ON'); } catch(e){}
     }
   }
 });
