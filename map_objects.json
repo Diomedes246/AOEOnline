@@ -209,17 +209,6 @@
     "ts": 1766153530.0273852
   },
   {
-    "id": "83832288-2011-4755-ad5c-bff3f08ba1ca",
-    "type": "tile",
-    "kind": "stone",
-    "x": 440.5,
-    "y": -186.5,
-    "rot": 0,
-    "owner": "U8kwKaInXg6cmt56AAAC",
-    "meta": {},
-    "ts": 1766153531.7173004
-  },
-  {
     "id": "b1785dd7-5588-487b-afb5-311fac0bfd15",
     "type": "tile",
     "kind": "water",
@@ -526,11 +515,11 @@
     ]
   },
   {
-    "id": "dd33f71d-7557-453c-b1ee-f8145ceb05b9",
+    "id": "a9aa5b4b-1a0b-4f0a-8126-c177abc249f6",
     "type": "tile",
     "kind": "town_center",
-    "x": -547.0,
-    "y": -175.5,
+    "x": -687.5,
+    "y": 101.5,
     "meta": {
       "entity": true,
       "title": "Building",
@@ -542,15 +531,16 @@
       "w": 256,
       "h": 256
     },
-    "owner": "OX6SsSkw2cspPu3SAAAJ",
-    "itemSlots": []
+    "owner": "Co89OZyPn6zcFqRFAAAD",
+    "itemSlots": [],
+    "hp": 487.5
   },
   {
-    "id": "dcd065a2-0777-4e61-9a5b-ee4d2590e9c5",
+    "id": "06b81914-dddd-428f-8e37-f4998a4b75b5",
     "type": "tile",
     "kind": "town_center",
-    "x": -462.0,
-    "y": 157.5,
+    "x": 474.5,
+    "y": 863.5,
     "meta": {
       "entity": true,
       "title": "Building",
@@ -562,7 +552,8 @@
       "w": 256,
       "h": 256
     },
-    "owner": "z4lKFg8ogYr-OY2rAAAD",
-    "itemSlots": []
+    "owner": "9tyYcrSKiiUU_nM0AAAF",
+    "itemSlots": [],
+    "hp": 500
   }
 ]

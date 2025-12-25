@@ -159,6 +159,13 @@ for (const obj of worldRenderables) {
 
   if (obj._type === "resource") {
     ctx.drawImage(resourceImg, sx - RES_W/2, sy - RES_H/2, RES_W, RES_H);
+    // small colored square above resource to indicate type
+    const rtype = obj.type || 'red';
+    const colorMap = { red: '#d32f2f', green: '#4CAF50', blue: '#2196F3' };
+    const c = colorMap[rtype] || '#888';
+    ctx.fillStyle = c;
+    const sq = 10;
+    ctx.fillRect(sx - sq/2, sy - RES_H/2 - 12 - sq, sq, sq);
     continue;
   }
 
@@ -197,6 +204,24 @@ const h = obj.meta?.h ?? def.h;
     ctx.setLineDash([]);
   }
   drawEntityTitle(obj, sx, sy);
+  // draw health bar for entity tiles
+  if (obj.meta?.entity) {
+    const hp = obj.hp ?? obj.meta.hp ?? null;
+    if (hp !== null) {
+      const wbar = obj.meta?.w ?? def.w;
+      const hbar = 8;
+      const bx = sx - Math.min(120, wbar) / 2;
+      const by = sy - (obj.meta?.h ?? def.h) / 2 - 18;
+      ctx.fillStyle = 'rgba(0,0,0,0.6)';
+      ctx.fillRect(bx, by, Math.min(120, wbar), hbar);
+      const pct = Math.max(0, Math.min(1, (hp / (obj.meta?.maxHp || 500))));
+      ctx.fillStyle = (obj.kind === 'house') ? '#4CAF50' : 'red';
+      ctx.fillRect(bx, by, Math.min(120, wbar) * pct, hbar);
+      ctx.strokeStyle = 'white';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(bx, by, Math.min(120, wbar), hbar);
+    }
+  }
   continue;
 }
 
@@ -210,6 +235,25 @@ const h = obj.meta?.h ?? def.h;
       ctx.setLineDash([5, 5]);
       ctx.strokeRect(sx - BUILD_W/2, sy - BUILD_H/2, BUILD_W, BUILD_H);
       ctx.setLineDash([]);
+    }
+    // draw health bar for entities
+    if (obj.meta?.entity) {
+      const hp = obj.hp ?? obj.meta.hp ?? null;
+      if (hp !== null) {
+        const barW = 70;
+        const barH = 8;
+        const bx = sx - barW/2;
+        const by = sy - BUILD_H/2 - 18;
+
+        ctx.fillStyle = 'rgba(0,0,0,0.6)';
+        ctx.fillRect(bx, by, barW, barH);
+        const pct = Math.max(0, Math.min(1, (hp / (obj.meta?.maxHp || 500))));
+        ctx.fillStyle = (obj.kind === 'house') ? '#4CAF50' : 'red';
+        ctx.fillRect(bx, by, barW * pct, barH);
+        ctx.strokeStyle = 'white';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(bx, by, barW, barH);
+      }
     }
     continue;
   }
@@ -414,6 +458,23 @@ for (const item of unitRenderables) {
     ctx.setLineDash([]);
   }
 
+  // Attack hover for enemy entities
+  if (typeof hoveredAttackEntity !== 'undefined' && hoveredAttackEntity) {
+    const ent = hoveredAttackEntity;
+    const w = (ent.meta && (ent.meta.cw || ent.meta.w)) ? (ent.meta.cw || ent.meta.w) : (ent.type === 'building' ? BUILD_W : (TILE_DEFS[ent.kind]?.w || 256));
+    const h = (ent.meta && (ent.meta.ch || ent.meta.h)) ? (ent.meta.ch || ent.meta.h) : (ent.type === 'building' ? BUILD_H : (TILE_DEFS[ent.kind]?.h || 256));
+    const ex = canvas.width/2 + ent.x - camera.x;
+    const ey = canvas.height/2 + ent.y - camera.y;
+
+    ctx.strokeStyle = 'rgba(255,50,50,0.95)';
+    ctx.lineWidth = 3;
+    ctx.setLineDash([6,4]);
+    ctx.beginPath();
+    ctx.rect(ex - w/2, ey - h/2, w, h);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
 
   drawHarvestBars();
 
@@ -522,9 +583,16 @@ for (const it of visibleItems) {
 
 
   // HUD update (safe use of selectedUnits)
-hud.innerText = `Camera: ${camera.x|0}, ${camera.y|0}
-Resources: ${resourceCount}
-Selected: ${selectedUnits.length}
+  // Population: local units and cap based on owned town centers
+  const popCount = myUnits.length;
+  const townCentersOwned = (mapObjects || []).filter(o => o.owner === mySid && o.kind === 'town_center').length;
+  const popCap = townCentersOwned * (typeof POP_LIMIT === 'number' ? POP_LIMIT : 10);
+
+  const rc = window.resourceCounts || { red:0, green:0, blue:0 };
+  hud.innerHTML = `Camera: ${camera.x|0}, ${camera.y|0}<br/>
+<span style="color:#d32f2f">■</span> ${rc.red || 0} <span style="color:#4CAF50">■</span> ${rc.green || 0} <span style="color:#2196F3">■</span> ${rc.blue || 0}<br/>
+Selected: ${selectedUnits.length}<br/>
+Population: ${popCount} / ${popCap}<br/>
 TileSize: ${editorTileW}x${editorTileH}  Collision: ${editorCollisionEnabled ? `${editorCollisionW}x${editorCollisionH}` : "OFF"}`;
 
 

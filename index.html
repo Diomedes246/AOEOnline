@@ -49,11 +49,11 @@
 
   <div id="panel">
     <div>Unit Selected</div>
-    <button id="buildBtn">Place Building</button>
+    <button id="buildBtn">Place Town Center</button>
   </div>
 
   <div id="buildingPanel" style="display:none; position:fixed; bottom:20px; left:20px; width:220px; height:120px; background:rgba(30,30,30,0.85); border:2px solid #888; padding:10px; color:white; font-family:monospace;">
-    <div>Building Selected</div>
+    <div>Town Center Selected</div>
     <button id="createUnitBtn">Create Unit</button>
   </div>
 
@@ -229,6 +229,7 @@
     window.ASSETS_LOADED = false;
   })();
   let editorMode = false;
+  let entityMode = false;
   let editorTileW = 256;
   let editorTileH = 256;
   let editorTileAspect = 1;
@@ -245,9 +246,11 @@
   let buildings = [];
   let myUnits = [];
   let players = {};
-  let resourceCount = 0;
+  let resourceCounts = { red: 0, green: 0, blue: 0 };
+  window.resourceCounts = resourceCounts;
   let hoveredResource = null;
   let hoveredPlayerSid = null;
+  let hoveredAttackEntity = null;
   let dragMouse = {x:0,y:0};
   let selecting = false;
   let selectStart = {x:0,y:0};
@@ -261,6 +264,12 @@
   const BUILD_H = 256;
   const buildingImg = new Image();
   buildingImg.src = "static/tiles/building.png";
+  // Client-side per-town-center population limit (used for HUD cap calculation)
+  const POP_LIMIT = 10;
+  // How many town centers a player may place
+  const BUILD_LIMIT = 1;
+  // Cost in resources to place a town center
+  const TOWN_CENTER_COST = 5;
   </script>
 
   <script src="static/input.js"></script>
@@ -274,6 +283,15 @@
   const hud = document.getElementById("hud");
   const panel = document.getElementById("panel");
   const buildBtn = document.getElementById("buildBtn");
+
+  function updateBuildButton() {
+    if (!buildBtn) return;
+    const owned = (mapObjects || []).filter(o => o.kind === 'town_center' && o.owner === mySid).length;
+    buildBtn.innerText = `Place Town Center (Cost: ${TOWN_CENTER_COST} red) (${owned}/${BUILD_LIMIT})`;
+    // disable if reached build limit or not enough red resources
+    buildBtn.disabled = (owned >= BUILD_LIMIT) || ((resourceCounts.red || 0) < TOWN_CENTER_COST);
+    buildBtn.title = `Cost: ${TOWN_CENTER_COST} resources`;
+  }
 
   // Entity inspector elements (used by openEntityInspector / input handlers)
   const entityPanelEl = document.getElementById("entityPanel");
@@ -692,10 +710,22 @@
         const isTownCenter = (o.kind === "town_center" || (o.meta && o.meta.kind === "town_center"));
         if (isTownCenter) {
           const btn = document.createElement("button");
-          btn.textContent = "Spawn Unit";
+          btn.textContent = "Spawn Unit (cost: 1 green)";
           btn.style.height = "30px";
+          // disable for players who don't own this town center or lack green resources
+          const owned = (o.owner && o.owner === mySid);
+          const hasGreen = (window.resourceCounts && (window.resourceCounts.green || 0) >= 1);
+          btn.disabled = !owned || !hasGreen;
+          if (!owned) {
+            btn.title = "You do not own this building";
+            btn.style.opacity = "0.5";
+          } else if (!hasGreen) {
+            btn.title = "Requires 1 green resource to spawn";
+            btn.style.opacity = "0.5";
+          }
           btn.onclick = () => {
             if (!o || !o.id) return;
+            if (!owned) return; // double-check on click
             socket.emit("spawn_unit_from_entity", { entityId: o.id });
           };
           abilitiesEl.appendChild(btn);
@@ -982,13 +1012,12 @@
 
 
   resources = resources || [];          // {id, x, y}
-  let harvesting = null;       // {resourceId, startTime}
   const resourceImg = new Image();
   resourceImg.src = "static/resource.png";
   const RES_W = 48;
   const RES_H = 48;
 
-  resourceCount = resourceCount || 0;
+  resourceCounts = resourceCounts || { red: 0, green: 0, blue: 0 };
   hoveredResource = hoveredResource || null;
 
   hoveredPlayerSid = hoveredPlayerSid || null;  
@@ -997,21 +1026,36 @@
     const cols = 69;
     const rows = 53;
     const spacing = 180;
-    let id = 0;
 
-    for(let r=0;r<rows;r++){
-      for(let c=0;c<cols;c++){
-        if(Math.random() < 0.6){
+    // start ids after any existing resources to avoid collisions
+    let nextId = 0;
+    if (resources && resources.length) {
+      nextId = Math.max(...resources.map(rr => rr.id || 0)) + 1;
+    }
+
+    // center the grid so resources appear in both negative and positive world coordinates
+    const colOffset = Math.floor(cols / 2);
+    const rowOffset = Math.floor(rows / 2);
+
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        if (Math.random() < 0.6) {
+          const types = ["red", "green", "blue"];
+          const t = types[Math.floor(Math.random() * types.length)];
+
+          const cc = c - colOffset;
+          const rr = r - rowOffset;
+
           resources.push({
-            id: id++,
-            x: (c - r) * spacing,
-            y: (c + r) * spacing / 2
+            id: nextId++,
+            x: (cc - rr) * spacing,
+            y: (cc + rr) * spacing / 2,
+            type: t
           });
         }
       }
     }
   }
-  spawnResources();
 
   /* ================= COMBAT ================= */
   const ATTACK_RANGE = 80;
@@ -1031,19 +1075,28 @@
               "server me.units", state.players?.[mySid]?.units?.length);
 
     if (state.ground_items) groundItems = state.ground_items;
+    // sync authoritative resources from server
+    if (state.resources) {
+      resources = state.resources;
+    }
 
     // ✅ FIRST: sync my own units from server (adopt server ids)
     const me = state.players?.[mySid];
     if (me && Array.isArray(me.units)) {
       myUnits = mergeUnitsPreserveFrames(myUnits, me.units);
     }
+    // sync authoritative resource counts from server
+    if (me) {
+      resourceCounts = me.resources || { red: 0, green: 0, blue: 0 };
+      window.resourceCounts = resourceCounts;
+    }
+    try { updateBuildButton(); } catch (e) {}
 
     for (const sid in players){
             const first = players[sid].units[0];
     if (first) { players[sid].x = first.x; players[sid].y = first.y; }
     }
-
-
+    
     // existing: remove players no longer on server
     for (const sid in players) {
       if (!state.players[sid] || !state.players[sid].units || state.players[sid].units.length === 0) {
@@ -1105,6 +1158,11 @@
     groundItems = items || [];
     // optional debug:
     // console.log("ground_items update", groundItems.length);
+  });
+
+  // also listen for direct resources broadcast
+  socket.on("resources", (res) => {
+    resources = res || [];
   });
 
   socket.on("update_units", ({ sid, units }) => {
@@ -1190,6 +1248,23 @@
         openEntityInspector(updated);
       }
     }
+    // update build button count/limit
+    try { updateBuildButton(); } catch(e){}
+  });
+
+  // Update entity HP when server reports damage
+  socket.on("entity_hp_update", ({ entityId, hp }) => {
+    try {
+      const o = (mapObjects || []).find(x => x.id === entityId);
+      if (o) {
+        o.hp = hp;
+        // refresh inspector if open for this entity
+        if (selectedEntityId === entityId && entityPanelEl && entityPanelEl.style.display === 'block') {
+          openEntityInspector(o);
+        }
+      }
+      console.log("SERVER_DEBUG: entity_hp_update", entityId, hp);
+    } catch (e) { console.error(e); }
   });
 
   tile.onload = draw;

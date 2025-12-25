@@ -58,6 +58,28 @@ canvas.addEventListener("mousemove", e=>{
     }
   }
 
+  // Entity hover (priority 3) - show attack hover for enemy entities
+  hoveredAttackEntity = null;
+  for (let i = (mapObjects || []).length - 1; i >= 0; i--) {
+    const o = mapObjects[i];
+    if (!o || !o.meta || !o.meta.entity) continue;
+    // only consider enemy-owned entities
+    if (o.owner === mySid) continue;
+    // only buildings or town_center kind are attackable
+    if (!(o.type === 'building' || o.kind === 'town_center')) continue;
+
+    // compute collision extents
+    let w = BUILD_W, h = BUILD_H;
+    if (o.type === 'building') { w = BUILD_W; h = BUILD_H; }
+    else { const def = TILE_DEFS[o.kind] || { w: 256, h: 256 }; w = o.meta?.w ?? def.w; h = o.meta?.h ?? def.h; }
+
+    if (Math.abs(wx - o.x) < w/2 && Math.abs(wy - o.y) < h/2) {
+      hoveredAttackEntity = o;
+      canvas.style.cursor = 'crosshair';
+      return;
+    }
+  }
+
   canvas.style.cursor = "default";
 });
 
@@ -193,6 +215,12 @@ if (e.button === 0) {
 
     // ===== Build placement =====
   if (buildMode && !localBuildingPlaced) {
+    // require TOWN_CENTER_COST resources to place a town center
+    if (((window.resourceCounts && window.resourceCounts.red) || 0) < (typeof TOWN_CENTER_COST === 'number' ? TOWN_CENTER_COST : 5)) {
+      try { buildMode = false; localBuildingPlaced = false; buildBtn.disabled = false; } catch(e){}
+      alert(`Not enough red resources to build Town Center (requires ${typeof TOWN_CENTER_COST === 'number' ? TOWN_CENTER_COST : 5})`);
+      return;
+    }
     // Spawn a persistent map object (tile) using the building tile image
     // Server will persist and broadcast via `map_objects`.
     localBuildingPlaced = true;
@@ -406,29 +434,67 @@ canvas.addEventListener("mouseup", e=>{
 
         const selectedUnits = myUnits.filter(u => u.selected);
 
+        // Helper: find a map entity at world coords (point-in-rect using meta collision or size)
+        function findEntityAt(wx, wy) {
+          for (const o of (mapObjects || [])) {
+            if (!o.meta?.entity) continue;
+            const w = o.meta?.cw ?? o.meta?.w ?? BUILD_W;
+            const h = o.meta?.ch ?? o.meta?.h ?? BUILD_H;
+            const left = o.x - w/2;
+            const right = o.x + w/2;
+            const top = o.y - h/2;
+            const bottom = o.y + h/2;
+            if (wx >= left && wx <= right && wy >= top && wy <= bottom) return o;
+          }
+          return null;
+        }
+
+        let clickedEntity = findEntityAt(wx, wy);
+        // If hit-test fails but we have an attack-hovered entity, use it as the clicked entity.
+        if (!clickedEntity && typeof hoveredAttackEntity !== 'undefined' && hoveredAttackEntity) {
+          clickedEntity = hoveredAttackEntity;
+        }
+
         // Assign a stable formation index and total so units keep their relative positions
         selectedUnits.forEach((u, idx) => {
           u._formationIndex = idx;
           u._formationTotal = selectedUnits.length;
 
-        
-  u.targetEnemy = null;
-  harvesting = null;
+          u.targetEnemy = null;
+          u.harvesting = null;
 
-    if (clickedResource) {
-    // ✅ resource gather command
-    u.targetResource = clickedResource.id;
-    u.manualMove = false;            // ✅ IMPORTANT: don't get stuck in manualMove
-    u.tx = clickedResource.x;        // move toward resource center
-    u.ty = clickedResource.y;
-  } else {
-    // normal move command
-    u.targetResource = null;
-    u.tx = wx;
-    u.ty = wy;
-    u.manualMove = true;
-  }
-});
+          // If clicking an enemy entity, set unit to attack that entity instead of moving to its center
+          if (clickedEntity && clickedEntity.owner !== mySid) {
+            // compute an attack approach point on the entity perimeter so collision doesn't block engagement
+            const cw = (clickedEntity.meta && clickedEntity.meta.cw) ? clickedEntity.meta.cw : (clickedEntity.meta && clickedEntity.meta.w ? clickedEntity.meta.w : BUILD_W);
+            const ch = (clickedEntity.meta && clickedEntity.meta.ch) ? clickedEntity.meta.ch : (clickedEntity.meta && clickedEntity.meta.h ? clickedEntity.meta.h : BUILD_H);
+            const entRadius = Math.max(cw, ch) / 2;
+            const dxToEnt = clickedEntity.x - u.x;
+            const dyToEnt = clickedEntity.y - u.y;
+            const distToEnt = Math.hypot(dxToEnt, dyToEnt) || 1;
+            const nx = dxToEnt / distToEnt;
+            const ny = dyToEnt / distToEnt;
+            // desired distance from center so effective distance <= UNIT_ATTACK_RANGE
+            const desiredDist = entRadius + UNIT_ATTACK_RANGE - 4; // small buffer
+            const attackX = clickedEntity.x - nx * desiredDist;
+            const attackY = clickedEntity.y - ny * desiredDist;
+
+            u.targetEnemy = { kind: 'entity', entityId: clickedEntity.id, x: clickedEntity.x, y: clickedEntity.y, attackPoint: { x: attackX, y: attackY } };
+            u.manualMove = false;
+          } else if (clickedResource) {
+            // ✅ resource gather command
+            u.targetResource = clickedResource.id;
+            u.manualMove = false;            // ✅ IMPORTANT: don't get stuck in manualMove
+            u.tx = clickedResource.x;        // move toward resource center
+            u.ty = clickedResource.y;
+          } else {
+            // normal move command
+            u.targetResource = null;
+            u.tx = wx;
+            u.ty = wy;
+            u.manualMove = true;
+          }
+        });
 
         
     }
@@ -605,7 +671,14 @@ socket.emit("spawn_unit", { unit: newUnit });
     }
 };
 
-buildBtn.onclick = ()=>{ if(!localBuildingPlaced) buildMode=true; };
+// Ensure build button works even if element wasn't present at script load
+document.addEventListener('click', (ev) => {
+  const t = ev.target;
+  if (!t) return;
+  if (t.id === 'buildBtn' || t.closest && t.closest('#buildBtn')) {
+    if (!localBuildingPlaced) buildMode = true;
+  }
+});
 
 // editor collision globals are declared in index.html to avoid duplicates
 
@@ -614,3 +687,11 @@ editorBtn.onclick = () => {
   editorMode = !editorMode;
   editorBtn.textContent = editorMode ? "Editor: ON" : "Editor: OFF";
 };
+
+const entityBtn = document.getElementById("entityBtn");
+if (entityBtn) {
+  entityBtn.onclick = () => {
+    entityMode = !entityMode;
+    entityBtn.textContent = entityMode ? "Entity: ON" : "Entity: OFF";
+  };
+}

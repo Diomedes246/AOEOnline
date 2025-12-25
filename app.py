@@ -11,8 +11,17 @@ from pathlib import Path
 MAP_FILE = "map_objects.json"
 map_lock = Lock()
 
+# Cost constants
+TOWN_CENTER_COST = 5
+
 GROUND_FILE = "ground_items.json"
 ground_lock = Lock()
+
+RES_FILE = "resources.json"
+resources_lock = Lock()
+
+# resources: list of {id, x, y, type}
+resources = []
 
 # Each object: {id, type, kind, x, y, owner, rot, meta}
 map_objects = []
@@ -24,6 +33,19 @@ def load_map():
             map_objects = json.load(f)
     else:
         map_objects = []
+    # Ensure only building-type entities have HP; other entities are invulnerable by default
+    for o in map_objects:
+        if o.get("meta", {}).get("entity") and (o.get("type") == "building" or o.get("kind") == "town_center"):
+            if o.get("hp") is None:
+                # default HP for town_center vs generic building
+                if o.get("kind") == "town_center":
+                    o["hp"] = 500
+                else:
+                    o["hp"] = 200
+        else:
+            # remove hp for non-building entities to make them invulnerable
+            if "hp" in o:
+                del o["hp"]
 
 def load_ground():
     global ground_items
@@ -32,6 +54,22 @@ def load_ground():
             ground_items[:] = json.load(f)
     else:
         ground_items.clear()
+
+
+def load_resources():
+    global resources
+    if os.path.exists(RES_FILE):
+        with open(RES_FILE, "r", encoding="utf-8") as f:
+            resources = json.load(f)
+    else:
+        resources = []
+
+
+def save_resources():
+    tmp = RES_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(resources, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, RES_FILE)
 
 def save_map():
     tmp = MAP_FILE + ".tmp"
@@ -46,6 +84,7 @@ def save_ground():
     os.replace(tmp, GROUND_FILE)
 
 load_map()
+load_resources()
 
 
 app = Flask(__name__)
@@ -133,7 +172,8 @@ def emit_state(to_sid=None):
         "buildings": buildings,
         "trees": trees,
         "ground_items": ground_items,
-        "map_objects": map_objects
+        "map_objects": map_objects,
+        "resources": resources
 
     }
     if to_sid:
@@ -176,6 +216,19 @@ def on_request_map():
 
 @socketio.on("place_map_object")
 def place_map_object(data):
+    sid = request.sid
+    # Server-side validation: require resources for town_center placement
+    kind = data.get("kind")
+    if kind == "town_center":
+        player = players.get(sid)
+        # check red resource by default
+        if not player or player.get("resources", {}).get("red", 0) < TOWN_CENTER_COST:
+            socketio.emit("server_debug", {"msg": f"Not enough red resources to build Town Center (requires {TOWN_CENTER_COST})"}, to=sid)
+            return
+        # deduct cost from red resource
+        player.setdefault("resources", {"red":0,"green":0,"blue":0})
+        player["resources"]["red"] = max(0, player["resources"].get("red", 0) - TOWN_CENTER_COST)
+
     with map_lock:
         obj = {
             "id": data.get("id") or str(uuid.uuid4()),
@@ -189,10 +242,18 @@ def place_map_object(data):
             # optional itemSlots for persistent entity items
             "itemSlots": data.get("itemSlots") or []
         }
+        # If this is a building entity, ensure it has HP; other entities are invulnerable by default
+        if obj.get("meta", {}).get("entity") and (obj.get("type") == "building" or obj.get("kind") == "town_center"):
+            if data.get("hp") is not None:
+                obj["hp"] = float(data.get("hp"))
+            else:
+                obj["hp"] = 500 if obj.get("kind") == "town_center" else 200
         map_objects.append(obj)
         save_map()
 
+    # broadcast map and full state (so resources update on clients)
     socketio.emit("map_objects", map_objects)
+    emit_state()
 
 @socketio.on("update_map_object")
 def update_map_object(data):
@@ -208,6 +269,12 @@ def update_map_object(data):
                 # update persistent itemSlots if provided
                 if itemSlots is not None:
                     o["itemSlots"] = itemSlots
+                # keep hp if provided, but only for building-type entities or town_center kind
+                if data.get("hp") is not None and (o.get("type") == "building" or o.get("kind") == "town_center"):
+                    try:
+                        o["hp"] = float(data.get("hp"))
+                    except Exception:
+                        pass
                 changed = True
                 break
         if changed:
@@ -247,9 +314,38 @@ def on_connect():
             "itemSlots": make_default_slots()
         }]
     }
+    # initialize resource count for this player
+    # per-type resource counts
+    players[sid]["resources"] = {"red": 0, "green": 0, "blue": 0}
 
     if not trees:
         generate_trees(100)
+
+    # If server has no resources yet, generate a symmetric field and persist it
+    if not resources:
+        # generate a grid similar to client but server-side authoritative
+        cols = 69
+        rows = 53
+        spacing = 180
+        colOffset = cols // 2
+        rowOffset = rows // 2
+        nextId = 0
+        for r in range(rows):
+            for c in range(cols):
+                if random.random() < 0.6:
+                    types = ["red", "green", "blue"]
+                    t = random.choice(types)
+                    cc = c - colOffset
+                    rr = r - rowOffset
+                    resources.append({
+                        "id": nextId,
+                        "x": float((cc - rr) * spacing),
+                        "y": float((cc + rr) * spacing / 2),
+                        "type": t
+                    })
+                    nextId += 1
+        with resources_lock:
+            save_resources()
 
     # send full state to the new client
     emit_state(to_sid=sid)
@@ -334,6 +430,15 @@ def spawn_unit_from_entity(data):
             socketio.emit("server_debug", {"msg": "spawn_unit_from_entity: you do not own that town center"}, to=sid)
             return
 
+        # Check resource cost: each unit costs 1 green resource
+        p = players.get(sid)
+        if not p:
+            return
+        p.setdefault("resources", {"red":0, "green":0, "blue":0})
+        if p["resources"].get("green", 0) < 1:
+            socketio.emit("server_debug", {"msg": "Not enough green resources to spawn a unit (cost: 1 green)"}, to=sid)
+            return
+
         # spawn position: offset from entity
         ex = float(ent.get("x", 0))
         ey = float(ent.get("y", 0))
@@ -343,16 +448,28 @@ def spawn_unit_from_entity(data):
     if not p:
         return
 
-    # Enforce population limit per town_center (max 10 active units spawned from this entity)
-    current_spawned = 0
-    for pp in players.values():
-        for uu in pp.get("units", []):
-            if uu.get("spawnedFrom") == entity_id:
-                current_spawned += 1
+    # Enforce population limit: include existing units owned by the player
     POP_LIMIT = 10
-    if current_spawned >= POP_LIMIT:
-        print(f"[spawn_unit_from_entity] population limit reached for {entity_id}: {current_spawned}", flush=True)
-        socketio.emit("server_debug", {"msg": f"spawn_unit_from_entity: population limit ({POP_LIMIT}) reached for this town center"}, to=sid)
+    # count town centers owned by this owner (should be >=1)
+    owned_centers = 0
+    with map_lock:
+        for o in map_objects:
+            if o.get("kind") == "town_center" and o.get("owner") == sid:
+                owned_centers += 1
+
+    cap = max(POP_LIMIT, POP_LIMIT * owned_centers)
+    # count only alive units
+    owner_units_count = 0
+    for uu in players.get(sid, {}).get("units", []):
+        if (uu.get("hp") or 0) > 0:
+            owner_units_count += 1
+
+    print(f"[spawn_unit_from_entity] owner={sid} owned_centers={owned_centers} alive_units={owner_units_count} cap={cap}", flush=True)
+    socketio.emit("server_debug", {"msg": f"spawn attempt: owned_centers={owned_centers} alive_units={owner_units_count} cap={cap}"}, to=sid)
+
+    if owner_units_count >= cap:
+        print(f"[spawn_unit_from_entity] owner {sid} unit count {owner_units_count} >= cap {cap}", flush=True)
+        socketio.emit("server_debug", {"msg": f"spawn_unit_from_entity: population cap reached ({owner_units_count}/{cap})"}, to=sid)
         return
 
     # generate spawn offset to avoid stacking
@@ -371,6 +488,12 @@ def spawn_unit_from_entity(data):
         "itemSlots": make_default_slots(),
         "spawnedFrom": entity_id
     }
+
+    # Deduct green resource cost (server-authoritative)
+    try:
+        p["resources"]["green"] = max(0, int(p["resources"].get("green", 0)) - 1)
+    except Exception:
+        p["resources"]["green"] = p["resources"].get("green", 0) - 1
 
     p.setdefault("units", []).append(new_unit)
 
@@ -492,6 +615,52 @@ def on_pickup_item(data):
     emit_state()
 
 
+@socketio.on("collect_resource")
+def on_collect_resource(data):
+    sid = request.sid
+    # Expecting: { amount: 1, type: 'red', resourceId: <id> }
+    rtype = data.get("type") or "red"
+    try:
+        amount = int(data.get("amount", 1))
+    except Exception:
+        amount = 1
+
+    resource_id = data.get("resourceId")
+
+    p = players.get(sid)
+    if not p:
+        return
+
+    if "resources" not in p or not isinstance(p["resources"], dict):
+        p["resources"] = {"red": 0, "green": 0, "blue": 0}
+
+    if resource_id is None:
+        # fallback: just credit player (legacy clients)
+        p["resources"][rtype] = p["resources"].get(rtype, 0) + amount
+        emit_state()
+        return
+
+    # remove resource from authoritative list if present
+    removed = False
+    with resources_lock:
+        idx = next((i for i, rr in enumerate(resources) if rr.get("id") == resource_id), None)
+        if idx is not None:
+            # pop the resource and persist
+            resources.pop(idx)
+            save_resources()
+            removed = True
+
+    if removed:
+        # credit player
+        p["resources"][rtype] = p["resources"].get(rtype, 0) + amount
+        # broadcast updated resources and state to all clients
+        socketio.emit("resources", resources)
+        emit_state()
+    else:
+        # resource not found; still send state to keep client in sync
+        emit_state()
+
+
 
 @socketio.on("attack_unit")
 def handle_attack_unit(data):
@@ -526,6 +695,46 @@ def handle_attack_unit(data):
             "units": players[target_sid]["units"]
         })
         emit_state()
+
+
+@socketio.on("attack_entity")
+def handle_attack_entity(data):
+    # data: { entityId, damage }
+    entity_id = data.get("entityId")
+    try:
+        damage = float(data.get("damage", 0))
+    except (TypeError, ValueError):
+        return
+
+    if not entity_id:
+        return
+
+    with map_lock:
+        ent = next((m for m in map_objects if m.get("id") == entity_id), None)
+        if not ent:
+            return
+        # only entities with meta.entity may be attacked
+        if not ent.get("meta", {}).get("entity"):
+            return
+        # only entities that have an HP value (buildings) are damageable
+        if ent.get("hp") is None:
+            return
+
+        # subtract HP
+        ent["hp"] = max(0, float(ent.get("hp", 0)) - damage)
+
+        # broadcast HP update for entity
+        socketio.emit("entity_hp_update", {"entityId": entity_id, "hp": ent["hp"]})
+
+        # if destroyed, remove from map_objects
+        if ent["hp"] <= 0:
+            map_objects[:] = [o for o in map_objects if o.get("id") != entity_id]
+            save_map()
+            socketio.emit("map_objects", map_objects)
+            emit_state()
+        else:
+            # persist change
+            save_map()
 
 
 @socketio.on("request_state")

@@ -30,6 +30,10 @@ function getUnitTargetOffset(idx, total) {
     };
 }
 
+// Movement tuning
+const CHASE_SPEED = 2.0;   // speed when auto-chasing enemies/buildings
+const HARVEST_SPEED = 3.8; // speed when moving to harvest resources
+
 function findNearestEnemy(u) {
     let nearest = null;
     let nearestDist = Infinity;
@@ -43,15 +47,21 @@ function findNearestEnemy(u) {
             const dist = Math.hypot(u.x - eu.x, u.y - eu.y);
             if(dist < nearestDist){
                 nearestDist = dist;
-                nearest = {
-    sid,
-    unitId: eu.id,
-    x: eu.x,
-    y: eu.y
-};
+        nearest = { kind: 'unit', sid, unitId: eu.id, x: eu.x, y: eu.y };
 
             }
         });
+    }
+
+    // Check enemy buildings (only town_centers / building types)
+    for (const o of (mapObjects || [])) {
+      if (!(o.kind === 'town_center' || o.type === 'building')) continue;
+      if (o.owner === mySid) continue; // don't attack own buildings
+      const dist = Math.hypot(u.x - o.x, u.y - o.y);
+      if (dist < nearestDist) {
+        nearestDist = dist;
+        nearest = { kind: 'entity', entityId: o.id, x: o.x, y: o.y };
+      }
     }
 
     return nearest;
@@ -280,11 +290,13 @@ if (u.targetResource !== null) {
     const dist = Math.hypot(dx, dy);
 
     if (dist > RESOURCE_STOP_RADIUS) {
-      const speed = 2.6;
+      const speed = HARVEST_SPEED;
       u.x += (dx / dist) * Math.min(speed, dist);
       u.y += (dy / dist) * Math.min(speed, dist);
       u.anim = "walk";
       u.dir = getDirKey(dx, dy);
+      // moved away from resource: reset harvesting progress
+      u.harvesting = null;
      
     } else {
       u.anim = "idle";
@@ -295,8 +307,13 @@ if (u.targetResource !== null) {
         if (!u.harvesting || u.harvesting.resourceId !== r.id) {
           u.harvesting = { resourceId: r.id, startTime: now };
         } else if (now - u.harvesting.startTime >= HARVEST_TIME) {
+          // optimistically remove locally; server will broadcast authoritative list
           resources = resources.filter(rr => rr.id !== r.id);
-          resourceCount++;
+          // local bookkeeping per-type
+          const rtype = r.type || 'red';
+          try { window.resourceCounts = window.resourceCounts || { red:0, green:0, blue:0 }; window.resourceCounts[rtype] = (window.resourceCounts[rtype]||0) + 1; } catch(e) {}
+          // inform server of collected resource so server-side accounting is authoritative
+          try { socket.emit("collect_resource", { amount: 1, type: rtype, resourceId: r.id, unitId: u.id }); } catch (e) {}
           u.harvesting = null;
           u.targetResource = null;
         }
@@ -319,12 +336,38 @@ if (!u.manualMove) {
 
   // validate current targetEnemy by unitId
   if (u.targetEnemy) {
-    const enemyPlayer = players[u.targetEnemy.sid];
-    if (!enemyPlayer || !enemyPlayer.units || enemyPlayer.units.length === 0) {
-      u.targetEnemy = null;
-    } else {
-      const enemyUnit = enemyPlayer.units.find(eu => eu.id === u.targetEnemy.unitId);
-      if (!enemyUnit || (enemyUnit.hp ?? 0) <= 0) u.targetEnemy = null;
+    if (u.targetEnemy.kind === 'unit') {
+      const enemyPlayer = players[u.targetEnemy.sid];
+      if (!enemyPlayer || !enemyPlayer.units || enemyPlayer.units.length === 0) {
+        u.targetEnemy = null;
+      } else {
+        const enemyUnit = enemyPlayer.units.find(eu => eu.id === u.targetEnemy.unitId);
+        if (!enemyUnit || (enemyUnit.hp ?? 0) <= 0) {
+          u.targetEnemy = null;
+        } else {
+          // clear target if it's too far (left aggro)
+          const dx = enemyUnit.x - u.x;
+          const dy = enemyUnit.y - u.y;
+          const dist = Math.hypot(dx, dy);
+          if (dist > AGGRO_LOSE_RADIUS) u.targetEnemy = null;
+        }
+      }
+    } else if (u.targetEnemy.kind === 'entity') {
+      const ent = (mapObjects || []).find(m => m.id === u.targetEnemy.entityId);
+      if (!ent || (ent.hp ?? 0) <= 0) {
+        u.targetEnemy = null;
+      } else {
+        const dx = ent.x - u.x;
+        const dy = ent.y - u.y;
+        const dist = Math.hypot(dx, dy);
+
+        // approximate entity radius
+        const cw = (ent.meta && ent.meta.cw) ? ent.meta.cw : (ent.meta && ent.meta.w ? ent.meta.w : BUILD_W);
+        const ch = (ent.meta && ent.meta.ch) ? ent.meta.ch : (ent.meta && ent.meta.h ? ent.meta.h : BUILD_H);
+        const entRadius = Math.max(cw, ch) / 2;
+        const effectiveDist = Math.max(0, dist - entRadius);
+        if (effectiveDist > AGGRO_LOSE_RADIUS) u.targetEnemy = null;
+      }
     }
   }
 
@@ -333,44 +376,103 @@ if (!u.manualMove) {
     const nearest = findNearestEnemy(u);
     if (nearest) {
       const dist = Math.hypot(u.x - nearest.x, u.y - nearest.y);
-      if (dist <= 200) u.targetEnemy = nearest;
+      if (dist <= AGGRO_RADIUS) u.targetEnemy = nearest;
     }
   }
 
   // engage target
-  if (u.targetEnemy) {
-    const enemyPlayer = players[u.targetEnemy.sid];
-    const enemy = enemyPlayer?.units?.find(eu => eu.id === u.targetEnemy.unitId);
+    if (u.targetEnemy) {
+      if (u.targetEnemy.kind === 'unit') {
+        const enemyPlayer = players[u.targetEnemy.sid];
+        const enemy = enemyPlayer?.units?.find(eu => eu.id === u.targetEnemy.unitId);
 
-    if (!enemy || (enemy.hp ?? 0) <= 0) {
-      u.targetEnemy = null;
-    } else {
-      const dx = enemy.x - u.x;
-      const dy = enemy.y - u.y;
-      const dist = Math.hypot(dx, dy);
+        if (!enemy || (enemy.hp ?? 0) <= 0) {
+          u.targetEnemy = null;
+        } else {
+          const dx = enemy.x - u.x;
+          const dy = enemy.y - u.y;
+          const dist = Math.hypot(dx, dy);
 
-      if (dist > UNIT_ATTACK_RANGE) {
-        const moveSpeed = 1.2;
-        u.x += (dx / dist) * moveSpeed;
-        u.y += (dy / dist) * moveSpeed;
-        u.anim = "walk";
-        u.dir = getDirKey(dx, dy);
-      } else {
-        u.anim = "attack";
-        if (u.attackCooldown >= ATTACK_COOLDOWN) {
-          console.log("ATTACK", u.id, "->", u.targetEnemy.sid, u.targetEnemy.unitId);
-          socket.emit("attack_unit", {
-            targetSid: u.targetEnemy.sid,
-            unitId: u.targetEnemy.unitId,
-            damage: UNIT_ATTACK_DPS / 60
-          });
-          u.attackCooldown = 0;
+          if (dist > UNIT_ATTACK_RANGE) {
+            const moveSpeed = CHASE_SPEED;
+            const approach = Math.max(0, dist - UNIT_ATTACK_RANGE);
+            const step = Math.min(moveSpeed, approach);
+            if (step > 0) {
+              u.x += (dx / dist) * step;
+              u.y += (dy / dist) * step;
+            }
+            u.anim = "walk";
+            u.dir = getDirKey(dx, dy);
+          } else {
+            u.anim = "attack";
+            if (u.attackCooldown >= ATTACK_COOLDOWN) {
+              socket.emit("attack_unit", {
+                targetSid: u.targetEnemy.sid,
+                unitId: u.targetEnemy.unitId,
+                damage: UNIT_ATTACK_DPS / 60
+              });
+              u.attackCooldown = 0;
+            }
+          }
+        }
+      } else if (u.targetEnemy.kind === 'entity') {
+        const ent = (mapObjects || []).find(m => m.id === u.targetEnemy.entityId);
+        if (!ent || (ent.hp ?? 0) <= 0) {
+          u.targetEnemy = null;
+        } else {
+          // If an attackPoint was provided (from right-click), use it as approach target
+          let targetX = ent.x;
+          let targetY = ent.y;
+          if (u.targetEnemy.attackPoint && typeof u.targetEnemy.attackPoint.x === 'number') {
+            targetX = u.targetEnemy.attackPoint.x;
+            targetY = u.targetEnemy.attackPoint.y;
+          }
+
+          const dx = targetX - u.x;
+          const dy = targetY - u.y;
+          const dist = Math.hypot(dx, dy) || 1;
+
+          // compute entity collision radius (approx using meta collision or BUILD_W/BUILD_H)
+          const cw = (ent.meta && ent.meta.cw) ? ent.meta.cw : (ent.meta && ent.meta.w ? ent.meta.w : BUILD_W);
+          const ch = (ent.meta && ent.meta.ch) ? ent.meta.ch : (ent.meta && ent.meta.h ? ent.meta.h : BUILD_H);
+          const entRadius = Math.max(cw, ch) / 2;
+
+          // compute distance to entity CENTER for deciding attack (effective distance uses center)
+          const dxCenter = ent.x - u.x;
+          const dyCenter = ent.y - u.y;
+          const distCenter = Math.hypot(dxCenter, dyCenter);
+          const effectiveDist = Math.max(0, distCenter - entRadius);
+
+          // If effective distance is greater than attack range, approach the attackPoint (or center). Otherwise attack.
+          if (effectiveDist > UNIT_ATTACK_RANGE) {
+            const moveSpeed = CHASE_SPEED;
+            const approach = Math.max(0, effectiveDist - UNIT_ATTACK_RANGE);
+            const step = Math.min(moveSpeed, approach);
+            if (step > 0) {
+              // move toward the entity center to reliably reduce effectiveDist
+              const dxc = ent.x - u.x;
+              const dyc = ent.y - u.y;
+              const distc = Math.hypot(dxc, dyc) || 1;
+              u.x += (dxc / distc) * step;
+              u.y += (dyc / distc) * step;
+            }
+            u.anim = "walk";
+            u.dir = getDirKey(dx, dy);
+          } else {
+            u.anim = "attack";
+            if (u.attackCooldown >= ATTACK_COOLDOWN) {
+              socket.emit("attack_entity", {
+                entityId: u.targetEnemy.entityId,
+                damage: UNIT_ATTACK_DPS / 60
+              });
+              u.attackCooldown = 0;
+            }
+          }
         }
       }
+    } else {
+      if (u.anim !== "idle") u.anim = "idle";
     }
-  } else {
-    if (u.anim !== "idle") u.anim = "idle";
-  }
 }
 
   // --- Cooldowns ---
@@ -406,3 +508,7 @@ const unitStates = myUnits.map(u => ({
 }));
     socket.emit("update_units", { units: unitStates });
 }
+
+// Aggro radii (pixels)
+const AGGRO_RADIUS = 200;      // enter aggro
+const AGGRO_LOSE_RADIUS = 260; // leave aggro (hysteresis)
