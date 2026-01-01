@@ -31,8 +31,11 @@ function getUnitTargetOffset(idx, total) {
 }
 
 // Movement tuning
-const CHASE_SPEED = 2.0;   // speed when auto-chasing enemies/buildings
+const CHASE_SPEED = 4.5;   // speed when auto-chasing enemies/buildings (match run speed)
 const HARVEST_SPEED = 3.8; // speed when moving to harvest resources
+const FRAME_TIME = 1000 / 60; // baseline frame time
+
+let lastUpdateTime = performance.now();
 
 // Item-driven stat bonuses (keep in sync with server)
 const DPS_PER_ATTACK_POINT = 5;   // sword = +1 attack
@@ -102,14 +105,15 @@ function removeDeadUnits(unitsArray) {
     }
 }
 
-function advanceLocalAnim(u) {
+function advanceLocalAnim(u, dtScale) {
+  const step = ANIM_SPEED * (dtScale || 1);
   if (u.anim === "attack") {
-    u.attackFrame = ((u.attackFrame ?? 0) + ANIM_SPEED) % ATTACK_ANIM_FRAMES;
+    u.attackFrame = ((u.attackFrame ?? 0) + step) % ATTACK_ANIM_FRAMES;
   } else if (u.anim === "walk") {
-    u.frame = ((u.frame ?? 0) + ANIM_SPEED) % WALK_FRAMES;
+    u.frame = ((u.frame ?? 0) + step) % WALK_FRAMES;
   } else {
     // idle (default)
-    u.frame = ((u.frame ?? 0) + ANIM_SPEED) % IDLE_FRAMES;
+    u.frame = ((u.frame ?? 0) + step) % IDLE_FRAMES;
   }
 }
 
@@ -126,14 +130,16 @@ function resolveCircleRect(unit, radius, rect) {
   const dy = unit.y - closestY;
   const dist = Math.hypot(dx, dy);
 
-  if (dist === 0 || dist >= radius) return;
+  if (dist === 0 || dist >= radius) return null;
 
   const overlap = radius - dist;
-  const nx = dx / dist;
-  const ny = dy / dist;
+  const nx = dist === 0 ? 1 : dx / dist;
+  const ny = dist === 0 ? 0 : dy / dist;
 
   unit.x += nx * overlap;
   unit.y += ny * overlap;
+
+  return { collided: true, nx, ny, cx: rect.x, cy: rect.y, r: Math.max(rect.w, rect.h) / 2 };
 }
 
 function resolveCircleCircle(unit, radius, cx, cy, cr) {
@@ -142,11 +148,11 @@ function resolveCircleCircle(unit, radius, cx, cy, cr) {
   const dist = Math.hypot(dx, dy);
   const minDist = radius + cr;
 
-  if (dist === 0 || dist >= minDist) return;
+  if (dist === 0 || dist >= minDist) return null;
 
   const overlap = minDist - dist;
-  const nx = dx / dist;
-  const ny = dy / dist;
+  const nx = dist === 0 ? 1 : dx / dist;
+  const ny = dist === 0 ? 0 : dy / dist;
 
   unit.x += nx * overlap;
   unit.y += ny * overlap;
@@ -157,6 +163,8 @@ function resolveCircleCircle(unit, radius, cx, cy, cr) {
     drawCircleDebug(ux, uy, radius, "rgba(0,255,255,0.6)");
     drawCircleDebug(canvas.width/2 + cx - camera.x, canvas.height/2 + cy - camera.y, cr, "rgba(255,0,0,0.35)");
   }
+
+  return { collided: true, nx, ny, cx, cy, r: cr };
 }
 
 function resolveCircleBuilding(unit, radius, b) {
@@ -172,11 +180,11 @@ function resolveCircleBuilding(unit, radius, b) {
   const dy = unit.y - closestY;
   const dist = Math.hypot(dx, dy);
 
-  if (dist === 0 || dist >= radius) return;
+  if (dist === 0 || dist >= radius) return null;
 
   const overlap = radius - dist;
-  const nx = dx / dist;
-  const ny = dy / dist;
+  const nx = dist === 0 ? 1 : dx / dist;
+  const ny = dist === 0 ? 0 : dy / dist;
 
   unit.x += nx * overlap;
   unit.y += ny * overlap;
@@ -190,60 +198,216 @@ function resolveCircleBuilding(unit, radius, b) {
       "rgba(255,0,0,0.35)"
     );
   }
+
+  const r = Math.max(BUILD_W, BUILD_H) / 2 + BUILD_COLLISION_PADDING;
+  return { collided: true, nx, ny, cx: b.x, cy: b.y, r };
 }
 
-function applyCollisions(u) {
-  // Trees (circle-circle)
+// Collision probe that does not mutate positions
+function collidesAt(u, x, y, radius) {
+  // trees (circle)
   for (const t of trees) {
-    resolveCircleCircle(u, PLAYER_RADIUS, t.x, t.y - 150, TREE_RADIUS);
+    const dx = x - t.x;
+    const dy = y - (t.y - 150);
+    const minDist = radius + TREE_RADIUS;
+    if ((dx*dx + dy*dy) < minDist * minDist) return true;
   }
 
-  // Resources (circle-circle)
-  for (const r of resources) {
-    resolveCircleCircle(u, PLAYER_RADIUS, r.x, r.y, RESOURCE_RADIUS_COLLIDE);
-  }
-
-  // Buildings (circle-rect using BUILD_W/H)
+  // buildings (rect with padding)
   for (const b of buildings) {
-    resolveCircleBuilding(u, PLAYER_RADIUS, b);
+    const left   = b.x - BUILD_W / 2 - BUILD_COLLISION_PADDING;
+    const right  = b.x + BUILD_W / 2 + BUILD_COLLISION_PADDING;
+    const top    = b.y - BUILD_H / 2 - BUILD_COLLISION_PADDING;
+    const bottom = b.y + BUILD_H / 2 + BUILD_COLLISION_PADDING;
+    const closestX = Math.max(left, Math.min(x, right));
+    const closestY = Math.max(top, Math.min(y, bottom));
+    const dx = x - closestX;
+    const dy = y - closestY;
+    if ((dx*dx + dy*dy) < radius * radius) return true;
   }
 
-  // Tile collisions (keep your rect version)
+  // collidable map tiles (rect)
+  for (const o of mapObjects || []) {
+    if (o.type !== "tile") continue;
+    if (!o.meta || !o.meta.collides) continue;
+    const w = o.meta.cw;
+    const h = o.meta.ch;
+    const cx = o.x + (o.meta.cx || 0);
+    const cy = o.y + (o.meta.cy || 0);
+    const left   = cx - w / 2;
+    const right  = cx + w / 2;
+    const top    = cy - h / 2;
+    const bottom = cy + h / 2;
+    const closestX = Math.max(left, Math.min(x, right));
+    const closestY = Math.max(top, Math.min(y, bottom));
+    const dx = x - closestX;
+    const dy = y - closestY;
+    if ((dx*dx + dy*dy) < radius * radius) return true;
+  }
+
+  // enemy units
+  for (const sid in players) {
+    if (sid === mySid) continue;
+    for (const opUnit of players[sid].units || []) {
+      const dx = x - opUnit.x;
+      const dy = y - opUnit.y;
+      const minDist = radius + UNIT_RADIUS;
+      if ((dx*dx + dy*dy) < minDist * minDist) return true;
+    }
+  }
+
+  return false;
+}
+
+function trySteerMove(u, dx, dy, maxStep) {
+  const dist = Math.hypot(dx, dy);
+  if (dist < 0.001) return false;
+  const baseX = dx / dist;
+  const baseY = dy / dist;
+  const step = Math.min(maxStep, dist);
+  const angles = [0, 20, -20, 35, -35, 55, -55, 75, -75];
+  const stepScales = [1, 0.65, 0.4]; // try shorter steps to avoid penetrating obstacles
+
+  for (const s of stepScales) {
+    const effStep = step * s;
+    for (const a of angles) {
+      const rad = a * Math.PI / 180;
+      const cos = Math.cos(rad);
+      const sin = Math.sin(rad);
+      const nx = baseX * cos - baseY * sin;
+      const ny = baseX * sin + baseY * cos;
+      const newX = u.x + nx * effStep;
+      const newY = u.y + ny * effStep;
+      if (!collidesAt(u, newX, newY, PLAYER_RADIUS)) {
+        u.x = newX;
+        u.y = newY;
+        u.anim = "walk";
+        u.dir = getDirKey(nx, ny);
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function applyCollisions(u, nowTs) {
+  const prevX = (typeof u.lastX === 'number') ? u.lastX : u.x;
+  const prevY = (typeof u.lastY === 'number') ? u.lastY : u.y;
+  const mvx = u.x - prevX;
+  const mvy = u.y - prevY;
+  let firstHit = null;
+
+  const record = (res) => {
+    if (res && !firstHit) firstHit = res;
+  };
+
+  for (const t of trees) record(resolveCircleCircle(u, PLAYER_RADIUS, t.x, t.y - 150, TREE_RADIUS));
+  // Resources are non-colliding to avoid blocking paths
+  for (const b of buildings) record(resolveCircleBuilding(u, PLAYER_RADIUS, b));
+
   for (const o of mapObjects) {
     if (o.type !== "tile") continue;
     if (!o.meta || !o.meta.collides) continue;
-
-    resolveCircleRect(u, PLAYER_RADIUS, {
-      x: o.x, y: o.y,
-      w: o.meta.cw, h: o.meta.ch
-    });
+    const cx = o.x + (o.meta.cx || 0);
+    const cy = o.y + (o.meta.cy || 0);
+    record(resolveCircleRect(u, PLAYER_RADIUS, { x: cx, y: cy, w: o.meta.cw, h: o.meta.ch }));
   }
 
-  // Other local units (circle-circle)
-  for (const other of myUnits) {
-    if (other === u) continue;
-    resolveCircleCircle(u, UNIT_RADIUS, other.x, other.y, UNIT_RADIUS);
-  }
+  // Skip collisions against friendly units to prevent bumping
+  // (enemy units are still resolved below)
 
-  // Other players units (circle-circle)
   for (const sid in players) {
     if (sid === mySid) continue;
     for (const opUnit of players[sid].units) {
-      resolveCircleCircle(u, PLAYER_RADIUS, opUnit.x, opUnit.y, UNIT_RADIUS);
+      record(resolveCircleCircle(u, PLAYER_RADIUS, opUnit.x, opUnit.y, UNIT_RADIUS));
     }
+  }
+
+  if (firstHit) {
+    // revert to previous position and set a detour around the obstacle center
+    u.x = prevX;
+    u.y = prevY;
+
+    // Nudge slightly outward along collision normal so we don't remain embedded
+    if (typeof firstHit.nx === 'number' && typeof firstHit.ny === 'number') {
+      u.x += firstHit.nx * 2;
+      u.y += firstHit.ny * 2;
+    }
+
+    const toCenterX = (firstHit.cx ?? u.x) - prevX;
+    const toCenterY = (firstHit.cy ?? u.y) - prevY;
+    const toTargetX = (typeof u.tx === 'number') ? (u.tx - prevX) : 0;
+    const toTargetY = (typeof u.ty === 'number') ? (u.ty - prevY) : 0;
+    const isStuck = Math.hypot(mvx, mvy) < 0.01;
+    // Stable side choice per obstacle to avoid ping-ponging
+    const obsKey = `${Math.round(firstHit.cx || 0)}:${Math.round(firstHit.cy || 0)}`;
+    u._detourSides = u._detourSides || {};
+
+    const chooseSide = () => {
+      const tLen = Math.hypot(toTargetX, toTargetY);
+      const cLen = Math.hypot(toCenterX, toCenterY);
+      if (tLen > 0.001 && cLen > 0.001) {
+        const tx = toTargetX / tLen;
+        const ty = toTargetY / tLen;
+        const leftX = -toCenterY;
+        const leftY =  toCenterX;
+        const rightX = -leftX;
+        const rightY = -leftY;
+        const leftDot = (leftX * tx + leftY * ty) / Math.hypot(leftX, leftY);
+        const rightDot = (rightX * tx + rightY * ty) / Math.hypot(rightX, rightY);
+        return leftDot >= rightDot ? 1 : -1; // 1 => left tangent, -1 => right tangent
+      }
+      const cross = mvx * toCenterY - mvy * toCenterX;
+      return cross === 0 ? 1 : Math.sign(cross);
+    };
+
+    let side = u._detourSides[obsKey]?.side ?? chooseSide();
+    u._detourSides[obsKey] = { side, ts: nowTs || performance.now() };
+
+    let px = -toCenterY * side;
+    let py =  toCenterX * side;
+    if (isStuck && (toTargetX || toTargetY)) {
+      // When stalled, bias toward target while keeping chosen side
+      px = px * 0.7 + toTargetX * 0.3;
+      py = py * 0.7 + toTargetY * 0.3;
+    }
+    const mag = Math.hypot(px, py);
+    if (mag < 0.001) {
+      const seed = (u.id ? u.id.length : 1) + (firstHit.cx || 0);
+      px = (Math.sin(seed) || 1);
+      py = (Math.cos(seed) || 0);
+    } else {
+      px /= mag;
+      py /= mag;
+    }
+    const obstacleSize = Math.max(30, (firstHit.r || PLAYER_RADIUS * 2));
+    const baseDetour = isStuck ? (obstacleSize * 0.6 + 28) : (obstacleSize + PLAYER_RADIUS + 16);
+    const detourDist = (u._detour && u._detour.cx === firstHit.cx && u._detour.cy === firstHit.cy)
+      ? baseDetour * (isStuck ? 1.1 : 1.3)
+      : baseDetour;
+    const expires = (nowTs || performance.now()) + (isStuck ? 600 : 800);
+    u._detour = { x: prevX + px * detourDist, y: prevY + py * detourDist, expires, side, cx: firstHit.cx, cy: firstHit.cy };
+
+    // smaller nudge toward detour to avoid immediate re-collision
+    u.x += px * Math.min(3, detourDist * 0.04);
+    u.y += py * Math.min(3, detourDist * 0.04);
   }
 }
 
 function update(){
     if (!mySid) return;
     if (!myUnits || myUnits.length === 0) return; // wait for server state
-    // --- CAMERA ---
-    if(keys.w) camera.y -= camSpeed;
-    if(keys.s) camera.y += camSpeed;
-    if(keys.a) camera.x -= camSpeed;
-    if(keys.d) camera.x += camSpeed;
 
-    const now = performance.now();
+  const now = performance.now();
+  const dtMs = now - lastUpdateTime;
+  const dtScale = Math.min(3, dtMs / FRAME_TIME);
+  lastUpdateTime = now;
+
+    // --- CAMERA ---
+  if(keys.w) camera.y -= camSpeed * dtScale;
+  if(keys.s) camera.y += camSpeed * dtScale;
+  if(keys.a) camera.x -= camSpeed * dtScale;
+  if(keys.d) camera.x += camSpeed * dtScale;
 
 
     removeDeadUnits(myUnits);
@@ -273,6 +437,31 @@ function update(){
           }
         }
 
+        // Detour handling (set when colliding)
+        if (u._detour) {
+          if (now > (u._detour.expires || 0)) {
+            delete u._detour;
+          } else {
+            const dx = u._detour.x - u.x;
+            const dy = u._detour.y - u.y;
+            const dist = Math.hypot(dx, dy);
+            if (dist > 1.5) {
+              const speed = 4.5 * dtScale;
+              u.x += (dx / dist) * Math.min(speed, dist);
+              u.y += (dy / dist) * Math.min(speed, dist);
+              u.anim = "walk";
+              u.dir = getDirKey(dx, dy);
+              applyCollisions(u, now);
+              advanceLocalAnim(u, dtScale);
+              u.lastX = u.x;
+              u.lastY = u.y;
+              continue;
+            } else {
+              delete u._detour;
+            }
+          }
+        }
+
           // --- Manual move ---
   if(u.manualMove){
       // Prefer a stable formation index assigned when the move was issued
@@ -285,16 +474,19 @@ function update(){
       const targetX = u.tx + offset.dx;
       const targetY = u.ty + offset.dy;
 
-      const dx = targetX - u.x;
-      const dy = targetY - u.y;
-      const dist = Math.hypot(dx, dy);
+          const dx = targetX - u.x;
+          const dy = targetY - u.y;
+          const dist = Math.hypot(dx, dy);
         if(dist > 1.5){
-          const speed = 4.5;
-          u.x += (dx / dist) * Math.min(speed, dist);
-          u.y += (dy / dist) * Math.min(speed, dist);
-          u.anim = "walk";
-          u.dir = getDirKey(dx, dy);
-      
+          const speed = 4.5 * dtScale;
+            const moved = trySteerMove(u, dx, dy, Math.min(speed, dist));
+            if (!moved) {
+              u.x += (dx / dist) * Math.min(speed, dist);
+              u.y += (dy / dist) * Math.min(speed, dist);
+              u.anim = "walk";
+              u.dir = getDirKey(dx, dy);
+            }
+              applyCollisions(u, now);
       } else {
           u.x = targetX;
           u.y = targetY;
@@ -305,9 +497,8 @@ function update(){
           delete u._formationTotal;
           
       }
-        // Resolve collisions with other units/buildings after moving
-        applyCollisions(u);
-        advanceLocalAnim(u);
+        applyCollisions(u, now);
+        advanceLocalAnim(u, dtScale);
       u.lastX = u.x;
       u.lastY = u.y;
       continue;
@@ -326,11 +517,14 @@ if (u.targetResource !== null) {
     const dist = Math.hypot(dx, dy);
 
     if (dist > RESOURCE_STOP_RADIUS) {
-      const speed = HARVEST_SPEED;
-      u.x += (dx / dist) * Math.min(speed, dist);
-      u.y += (dy / dist) * Math.min(speed, dist);
-      u.anim = "walk";
-      u.dir = getDirKey(dx, dy);
+      const speed = HARVEST_SPEED * dtScale;
+      const moved = trySteerMove(u, dx, dy, Math.min(speed, dist));
+      if (!moved) {
+        u.x += (dx / dist) * Math.min(speed, dist);
+        u.y += (dy / dist) * Math.min(speed, dist);
+        u.anim = "walk";
+        u.dir = getDirKey(dx, dy);
+      }
       // moved away from resource: reset harvesting progress
       u.harvesting = null;
      
@@ -356,9 +550,9 @@ if (u.targetResource !== null) {
       }
       }
     }
-      // Resolve collisions after movement while harvesting
-      applyCollisions(u);
-      advanceLocalAnim(u);
+        // Resolve collisions after movement while harvesting
+        applyCollisions(u, now);
+        advanceLocalAnim(u, dtScale);
       u.lastX = u.x;
       u.lastY = u.y;
   continue;
@@ -430,19 +624,22 @@ if (!u.manualMove) {
           const dist = Math.hypot(dx, dy);
 
           if (dist > UNIT_ATTACK_RANGE) {
-            const moveSpeed = CHASE_SPEED;
+            const moveSpeed = CHASE_SPEED * dtScale;
             const approach = Math.max(0, dist - UNIT_ATTACK_RANGE);
             const step = Math.min(moveSpeed, approach);
             if (step > 0) {
-              u.x += (dx / dist) * step;
-              u.y += (dy / dist) * step;
+              const moved = trySteerMove(u, dx, dy, step);
+              if (!moved) {
+                u.x += (dx / dist) * step;
+                u.y += (dy / dist) * step;
+              }
             }
             u.anim = "walk";
             u.dir = getDirKey(dx, dy);
           } else {
             u.anim = "attack";
             if (u.attackCooldown >= ATTACK_COOLDOWN) {
-              const dmgPerTick = (stats?.dps ?? UNIT_ATTACK_DPS) / 60;
+              const dmgPerTick = ((stats?.dps ?? UNIT_ATTACK_DPS) / 60) * dtScale;
               socket.emit("attack_unit", {
                 targetSid: u.targetEnemy.sid,
                 unitId: u.targetEnemy.unitId,
@@ -483,7 +680,7 @@ if (!u.manualMove) {
 
           // If effective distance is greater than attack range, approach the attackPoint (or center). Otherwise attack.
           if (effectiveDist > UNIT_ATTACK_RANGE) {
-            const moveSpeed = CHASE_SPEED;
+            const moveSpeed = CHASE_SPEED * dtScale;
             const approach = Math.max(0, effectiveDist - UNIT_ATTACK_RANGE);
             const step = Math.min(moveSpeed, approach);
             if (step > 0) {
@@ -491,15 +688,18 @@ if (!u.manualMove) {
               const dxc = ent.x - u.x;
               const dyc = ent.y - u.y;
               const distc = Math.hypot(dxc, dyc) || 1;
-              u.x += (dxc / distc) * step;
-              u.y += (dyc / distc) * step;
+              const moved = trySteerMove(u, dxc, dyc, step);
+              if (!moved) {
+                u.x += (dxc / distc) * step;
+                u.y += (dyc / distc) * step;
+              }
             }
             u.anim = "walk";
             u.dir = getDirKey(dx, dy);
           } else {
             u.anim = "attack";
             if (u.attackCooldown >= ATTACK_COOLDOWN) {
-              const dmgPerTick = (stats?.dps ?? UNIT_ATTACK_DPS) / 60;
+              const dmgPerTick = ((stats?.dps ?? UNIT_ATTACK_DPS) / 60) * dtScale;
               socket.emit("attack_entity", {
                 entityId: u.targetEnemy.entityId,
                 damage: dmgPerTick,
@@ -516,23 +716,19 @@ if (!u.manualMove) {
 }
 
   // --- Cooldowns ---
-  if (u.attackCooldown < ATTACK_COOLDOWN) u.attackCooldown += 16.66;
+  if (u.attackCooldown < ATTACK_COOLDOWN) u.attackCooldown += 16.66 * dtScale;
 
   // Resolve collisions after combat movement/auto-chase
-  applyCollisions(u);
+  applyCollisions(u, now);
 
   // ✅ ALWAYS advance animation frames based on current anim
-  advanceLocalAnim(u);
+  advanceLocalAnim(u, dtScale);
 
 u.lastX = u.x;
 u.lastY = u.y;
     }
 
-    if(DEBUG_COLLISIONS){
-        for(const u of myUnits){
-            applyCollisions(u); // only for drawing, don't push
-        }
-    }
+    // Note: collision debug rendering is handled in draw.js; avoid extra collision passes here
 
 
     // --- SEND STATE TO SERVER ---

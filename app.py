@@ -150,16 +150,18 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 # State
 
 
-players = {}     # sid -> {x, y, color}
+players = {}     # player_id -> {x, y, color, units, resources}
 buildings = []   # list of {x, y, owner}
+sid_to_player = {}  # active socket sid -> player_id
+player_to_sid = {}  # player_id -> last seen sid
 
 ground_items = []  # [{id, name, x, y}]
 PICKUP_DISTANCE = 120
 
 load_ground()
 
-def find_unit(sid, unit_id):
-    p = players.get(sid)
+def find_unit(player_id, unit_id):
+    p = players.get(player_id)
     if not p:
         return None
     for u in p.get("units", []):
@@ -211,6 +213,22 @@ def compute_unit_stats(u):
     }
 
 
+def current_player_id():
+    return sid_to_player.get(request.sid)
+
+
+def current_player():
+    pid = current_player_id()
+    return pid, players.get(pid)
+
+
+def require_player_id():
+    pid = current_player_id()
+    if not pid:
+        socketio.emit("login_error", {"msg": "Login required"}, to=request.sid)
+    return pid
+
+
 def apply_unit_stats(u, owner_sid=None, broadcast_hp=False):
     """Recompute derived stats (maxHp/dps) from items and optionally broadcast HP."""
     stats = compute_unit_stats(u)
@@ -232,12 +250,13 @@ def apply_unit_stats(u, owner_sid=None, broadcast_hp=False):
     u["hp"] = new_hp
 
     if broadcast_hp and owner_sid and u.get("id"):
+        target_sid = player_to_sid.get(owner_sid, owner_sid)
         socketio.emit("unit_hp_update", {
             "sid": owner_sid,
             "unitId": u["id"],
             "hp": u["hp"],
             "maxHp": u["maxHp"]
-        })
+        }, to=target_sid)
 
     return u
 
@@ -337,25 +356,27 @@ def on_request_map():
 
 @socketio.on("place_map_object")
 def place_map_object(data):
-    sid = request.sid
+    pid = require_player_id()
+    if not pid:
+        return
     # Server-side validation: require resources for town_center placement
     kind = data.get("kind")
     if kind == "town_center":
-        player = players.get(sid)
+        player = players.get(pid)
         # check red resource by default
         if not player or player.get("resources", {}).get("red", 0) < TOWN_CENTER_COST:
-            socketio.emit("server_debug", {"msg": f"Not enough red resources to build Town Center (requires {TOWN_CENTER_COST})"}, to=sid)
+            socketio.emit("server_debug", {"msg": f"Not enough red resources to build Town Center (requires {TOWN_CENTER_COST})"}, to=request.sid)
             return
         # deduct cost from red resource
         player.setdefault("resources", {"red":0,"green":0,"blue":0})
         player["resources"]["red"] = max(0, player["resources"].get("red", 0) - TOWN_CENTER_COST)
     
     if kind == "mine":
-        player = players.get(sid)
+        player = players.get(pid)
         mine_cost = 3
         # check blue resource
         if not player or player.get("resources", {}).get("blue", 0) < mine_cost:
-            socketio.emit("server_debug", {"msg": f"Not enough blue resources to build Mine (requires {mine_cost})"}, to=sid)
+            socketio.emit("server_debug", {"msg": f"Not enough blue resources to build Mine (requires {mine_cost})"}, to=request.sid)
             return
         # deduct cost from blue resource
         player.setdefault("resources", {"red":0,"green":0,"blue":0})
@@ -363,9 +384,9 @@ def place_map_object(data):
         
         # Ensure player exists in players dict for mine production to work
         # Must include units array so client doesn't delete them for having no units
-        if sid not in players:
-            print(f"[MINE_PLACE] Creating player entry for {sid[:8]} (placing mine)", flush=True)
-            players[sid] = {
+        if pid not in players:
+            print(f"[MINE_PLACE] Creating player entry for {pid[:8]} (placing mine)", flush=True)
+            players[pid] = {
                 "resources": {"red": 0, "green": 0, "blue": 0},
                 "units": [],
                 "x": 0,
@@ -374,11 +395,11 @@ def place_map_object(data):
             }
 
     if kind == "blacksmith":
-        player = players.get(sid)
+        player = players.get(pid)
         smith_cost = 3
         # check red resource
         if not player or player.get("resources", {}).get("red", 0) < smith_cost:
-            socketio.emit("server_debug", {"msg": f"Not enough red resources to build Blacksmith (requires {smith_cost})"}, to=sid)
+            socketio.emit("server_debug", {"msg": f"Not enough red resources to build Blacksmith (requires {smith_cost})"}, to=request.sid)
             return
         player.setdefault("resources", {"red":0,"green":0,"blue":0})
         player["resources"]["red"] = max(0, player["resources"].get("red", 0) - smith_cost)
@@ -392,10 +413,15 @@ def place_map_object(data):
             "y": float(data.get("y", 0)),
             "meta": data.get("meta") or {},
             # owner: prefer client-provided, otherwise server-assign to the creator
-            "owner": data.get("owner") or request.sid,
+            "owner": data.get("owner") or pid,
             # optional itemSlots for persistent entity items
             "itemSlots": data.get("itemSlots") or []
         }
+        # Normalize collision offsets so they persist even if missing
+        m = obj["meta"]
+        if m is not None:
+            if "cx" not in m: m["cx"] = 0
+            if "cy" not in m: m["cy"] = 0
         # Initialize mine production meta
         if obj.get("kind") == "mine":
             m = obj.setdefault("meta", {})
@@ -437,7 +463,9 @@ def update_map_object(data):
     oid = data.get("id")
     meta = data.get("meta") or {}
     itemSlots = data.get("itemSlots")
-    sid = request.sid
+    pid = require_player_id()
+    if not pid:
+        return
 
     with map_lock:
         changed = False
@@ -448,8 +476,8 @@ def update_map_object(data):
                     new_mine_resource = meta.get("mine", {}).get("resource")
                 except Exception:
                     new_mine_resource = None
-                if new_mine_resource is not None and o.get("kind") == "mine" and o.get("owner") and o.get("owner") != sid:
-                    socketio.emit("server_debug", {"msg": "update_map_object: only the owner can change mine resource"}, to=sid)
+                if new_mine_resource is not None and o.get("kind") == "mine" and o.get("owner") and o.get("owner") != pid:
+                    socketio.emit("server_debug", {"msg": "update_map_object: only the owner can change mine resource"}, to=request.sid)
                     break
                 o["meta"] = {**(o.get("meta") or {}), **meta}  # merge
                 # update persistent itemSlots if provided
@@ -502,32 +530,60 @@ def delete_ground_item(data):
 def on_connect():
     sid = request.sid
     ensure_mine_loop_started()
-    socketio.emit("map_objects", map_objects, to=sid)
-    players[sid] = {
-        "x": 0,
-        "y": 0,
-        "color": random_color(),
-        "units": [{
-            "id": str(uuid.uuid4()),
-            "x": 0, "y": 0,
-            "tx": 0, "ty": 0,
-            "hp": BASE_UNIT_HP,
-            "anim": "idle",
-            "dir": "000",
-            "itemSlots": make_default_slots()
-        }]
-    }
-    apply_unit_stats(players[sid]["units"][0], owner_sid=sid, broadcast_hp=False)
-    # initialize resource count for this player
-    # per-type resource counts
-    players[sid]["resources"] = {"red": 0, "green": 0, "blue": 0}
+    socketio.emit("login_required", {}, to=sid)
+
+
+@socketio.on("login")
+def on_login(data):
+    sid = request.sid
+    ensure_mine_loop_started()
+    username = str((data or {}).get("username", "")).strip()
+    if not username:
+        socketio.emit("login_error", {"msg": "Username required"}, to=sid)
+        return
+    username = username[:32]
+
+    sid_to_player[sid] = username
+    player_to_sid[username] = sid
+
+    if username not in players:
+        players[username] = {
+            "x": 0,
+            "y": 0,
+            "color": random_color(),
+            "units": [{
+                "id": str(uuid.uuid4()),
+                "x": 0, "y": 0,
+                "tx": 0, "ty": 0,
+                "hp": BASE_UNIT_HP,
+                "anim": "idle",
+                "dir": "000",
+                "itemSlots": make_default_slots()
+            }],
+            "resources": {"red": 0, "green": 0, "blue": 0}
+        }
+        apply_unit_stats(players[username]["units"][0], owner_sid=username, broadcast_hp=False)
+    else:
+        # ensure legacy records have required fields
+        p = players[username]
+        p.setdefault("resources", {"red": 0, "green": 0, "blue": 0})
+        p.setdefault("units", [])
+        if not p["units"]:
+            p["units"].append({
+                "id": str(uuid.uuid4()),
+                "x": 0, "y": 0,
+                "tx": 0, "ty": 0,
+                "hp": BASE_UNIT_HP,
+                "anim": "idle",
+                "dir": "000",
+                "itemSlots": make_default_slots()
+            })
+            apply_unit_stats(p["units"][0], owner_sid=username, broadcast_hp=False)
 
     if not trees:
         generate_trees(100)
 
-    # If server has no resources yet, generate a symmetric field and persist it
     if not resources:
-        # generate a grid similar to client but server-side authoritative
         cols = 69
         rows = 53
         spacing = 180
@@ -551,11 +607,10 @@ def on_connect():
         with resources_lock:
             save_resources()
 
-    # send full state to the new client
+    socketio.emit("login_success", {"playerId": username}, to=sid)
     emit_state(to_sid=sid)
     emit_trees(sid)
-
-    # also broadcast to everyone so they see the new player immediately
+    socketio.emit("map_objects", map_objects, to=sid)
     emit_state()
 
 
@@ -563,31 +618,24 @@ def on_connect():
 @socketio.on("disconnect")
 def on_disconnect():
     sid = request.sid
-
-    # Remove player
-    if sid in players:
-        players.pop(sid)
-
-    # Remove their buildings
-    global buildings
-    buildings = [b for b in buildings if b["owner"] != sid]
-
-    # Tell ALL clients to hard-sync
+    pid = sid_to_player.pop(sid, None)
+    if pid:
+        player_to_sid.pop(pid, None)
     emit_state()
 
 
 @socketio.on("update")
 def on_update(data):
-    sid = request.sid
-    if sid in players:
-        players[sid]["x"] = data.get("x", players[sid]["x"])
-        players[sid]["y"] = data.get("y", players[sid]["y"])
+    pid = current_player_id()
+    if pid and pid in players:
+        players[pid]["x"] = data.get("x", players[pid]["x"])
+        players[pid]["y"] = data.get("y", players[pid]["y"])
     emit_state()
 
 @socketio.on("spawn_unit")
 def spawn_unit(data):
-    sid = request.sid
-    if sid not in players:
+    pid = require_player_id()
+    if not pid or pid not in players:
         return
 
     unit = data.get("unit", {})
@@ -605,15 +653,17 @@ def spawn_unit(data):
         "itemSlots": make_default_slots()
     }
 
-    apply_unit_stats(new_unit, owner_sid=sid, broadcast_hp=False)
+    apply_unit_stats(new_unit, owner_sid=pid, broadcast_hp=False)
 
-    players[sid]["units"].append(new_unit)
-    socketio.emit("update_units", {"sid": sid, "units": players[sid]["units"]})
+    players[pid]["units"].append(new_unit)
+    socketio.emit("update_units", {"sid": pid, "units": players[pid]["units"]})
 
 
 @socketio.on("spawn_unit_from_entity")
 def spawn_unit_from_entity(data):
-    sid = request.sid
+    pid = require_player_id()
+    if not pid:
+        return
     entity_id = data.get("entityId")
     if not entity_id:
         return
@@ -631,18 +681,18 @@ def spawn_unit_from_entity(data):
 
         # Only allow owner of the town_center to spawn units
         owner = ent.get("owner")
-        if owner != sid:
-            print(f"[spawn_unit_from_entity] unauthorized: sid={sid} owner={owner} entity={entity_id}", flush=True)
-            socketio.emit("server_debug", {"msg": "spawn_unit_from_entity: you do not own that town center"}, to=sid)
+        if owner != pid:
+            print(f"[spawn_unit_from_entity] unauthorized: player={pid} owner={owner} entity={entity_id}", flush=True)
+            socketio.emit("server_debug", {"msg": "spawn_unit_from_entity: you do not own that town center"}, to=request.sid)
             return
 
         # Check resource cost: each unit costs 1 green resource
-        p = players.get(sid)
+        p = players.get(pid)
         if not p:
             return
         p.setdefault("resources", {"red":0, "green":0, "blue":0})
         if p["resources"].get("green", 0) < 1:
-            socketio.emit("server_debug", {"msg": "Not enough green resources to spawn a unit (cost: 1 green)"}, to=sid)
+            socketio.emit("server_debug", {"msg": "Not enough green resources to spawn a unit (cost: 1 green)"}, to=request.sid)
             return
 
         # spawn position: offset from entity
@@ -650,7 +700,7 @@ def spawn_unit_from_entity(data):
         ey = float(ent.get("y", 0))
 
     # Create unit for requesting player
-    p = players.get(sid)
+    p = players.get(pid)
     if not p:
         return
 
@@ -660,22 +710,22 @@ def spawn_unit_from_entity(data):
     owned_centers = 0
     with map_lock:
         for o in map_objects:
-            if o.get("kind") == "town_center" and o.get("owner") == sid:
+            if o.get("kind") == "town_center" and o.get("owner") == pid:
                 owned_centers += 1
 
     cap = max(POP_LIMIT, POP_LIMIT * owned_centers)
     # count only alive units
     owner_units_count = 0
-    for uu in players.get(sid, {}).get("units", []):
+    for uu in players.get(pid, {}).get("units", []):
         if (uu.get("hp") or 0) > 0:
             owner_units_count += 1
 
-    print(f"[spawn_unit_from_entity] owner={sid} owned_centers={owned_centers} alive_units={owner_units_count} cap={cap}", flush=True)
-    socketio.emit("server_debug", {"msg": f"spawn attempt: owned_centers={owned_centers} alive_units={owner_units_count} cap={cap}"}, to=sid)
+    print(f"[spawn_unit_from_entity] owner={pid} owned_centers={owned_centers} alive_units={owner_units_count} cap={cap}", flush=True)
+    socketio.emit("server_debug", {"msg": f"spawn attempt: owned_centers={owned_centers} alive_units={owner_units_count} cap={cap}"}, to=request.sid)
 
     if owner_units_count >= cap:
-        print(f"[spawn_unit_from_entity] owner {sid} unit count {owner_units_count} >= cap {cap}", flush=True)
-        socketio.emit("server_debug", {"msg": f"spawn_unit_from_entity: population cap reached ({owner_units_count}/{cap})"}, to=sid)
+        print(f"[spawn_unit_from_entity] owner {pid} unit count {owner_units_count} >= cap {cap}", flush=True)
+        socketio.emit("server_debug", {"msg": f"spawn_unit_from_entity: population cap reached ({owner_units_count}/{cap})"}, to=request.sid)
         return
 
     # generate spawn offset to avoid stacking
@@ -695,7 +745,7 @@ def spawn_unit_from_entity(data):
         "spawnedFrom": entity_id
     }
 
-    apply_unit_stats(new_unit, owner_sid=sid, broadcast_hp=False)
+    apply_unit_stats(new_unit, owner_sid=pid, broadcast_hp=False)
 
     # Deduct green resource cost (server-authoritative)
     try:
@@ -706,14 +756,16 @@ def spawn_unit_from_entity(data):
     p.setdefault("units", []).append(new_unit)
 
     # notify owner and all clients
-    socketio.emit("update_units", {"sid": sid, "units": p["units"]})
+    socketio.emit("update_units", {"sid": pid, "units": p["units"]})
     emit_state()
 
 
 @socketio.on("drop_item")
 def on_drop_item(data):
     global ground_items
-    sid = request.sid
+    pid = require_player_id()
+    if not pid:
+        return
     unit_id = data.get("unitId")
     slot_index = data.get("slotIndex")
     x = data.get("x")
@@ -722,7 +774,7 @@ def on_drop_item(data):
     if unit_id is None or slot_index is None or x is None or y is None:
         return
 
-    u = find_unit(sid, unit_id)
+    u = find_unit(pid, unit_id)
     if not u:
         return
 
@@ -740,7 +792,7 @@ def on_drop_item(data):
     u["itemSlots"] = slots
 
     # Recompute stats after unequip
-    apply_unit_stats(u, owner_sid=sid, broadcast_hp=True)
+    apply_unit_stats(u, owner_sid=pid, broadcast_hp=True)
 
     # create ground item
     gi = {
@@ -760,12 +812,14 @@ def on_drop_item(data):
         save_ground()
 
     # only the owner needs equipment UI refresh
-    socketio.emit("unit_slots_update", {"unitId": unit_id, "itemSlots": slots}, to=sid)
+    socketio.emit("unit_slots_update", {"unitId": unit_id, "itemSlots": slots}, to=request.sid)
 
 
 @socketio.on("pickup_item")
 def on_pickup_item(data):
-    sid = request.sid
+    pid = require_player_id()
+    if not pid:
+        return
 
     unit_id = data.get("unitId")
     slot_index = data.get("slotIndex")
@@ -774,7 +828,7 @@ def on_pickup_item(data):
     if unit_id is None or slot_index is None or ground_id is None:
         return
 
-    u = find_unit(sid, unit_id)
+    u = find_unit(pid, unit_id)
     if not u:
         return
 
@@ -815,13 +869,13 @@ def on_pickup_item(data):
     u["itemSlots"] = slots
 
     # Recompute stats after equip
-    apply_unit_stats(u, owner_sid=sid, broadcast_hp=True)
+    apply_unit_stats(u, owner_sid=pid, broadcast_hp=True)
 
     # ✅ broadcast new ground list to everyone
     socketio.emit("ground_items", ground_items)
 
     # ✅ owner gets equipment refresh
-    socketio.emit("unit_slots_update", {"unitId": unit_id, "itemSlots": slots}, to=sid)
+    socketio.emit("unit_slots_update", {"unitId": unit_id, "itemSlots": slots}, to=request.sid)
 
     # persist ground items
     with ground_lock:
@@ -833,7 +887,9 @@ def on_pickup_item(data):
 
 @socketio.on("collect_resource")
 def on_collect_resource(data):
-    sid = request.sid
+    pid = require_player_id()
+    if not pid:
+        return
     # Expecting: { amount: 1, type: 'red', resourceId: <id> }
     rtype = data.get("type") or "red"
     try:
@@ -843,7 +899,7 @@ def on_collect_resource(data):
 
     resource_id = data.get("resourceId")
 
-    p = players.get(sid)
+    p = players.get(pid)
     if not p:
         return
 
@@ -884,10 +940,12 @@ def handle_attack_unit(data):
     target_id  = data.get("unitId")
     attacker_id = data.get("attackerId")
 
+    attacker_owner = current_player_id()
+
     # Recompute damage server-side based on attacker's items
     damage = None
     if attacker_id:
-        attacker = find_unit(request.sid, attacker_id)
+        attacker = find_unit(attacker_owner, attacker_id)
         if attacker:
             stats = compute_unit_stats(attacker)
             damage = stats["dps"] / TICKS_PER_SECOND
@@ -928,10 +986,11 @@ def handle_attack_entity(data):
     # data: { entityId, damage }
     entity_id = data.get("entityId")
     attacker_id = data.get("attackerId")
+    attacker_owner = current_player_id()
 
     damage = None
     if attacker_id:
-        attacker = find_unit(request.sid, attacker_id)
+        attacker = find_unit(attacker_owner, attacker_id)
         if attacker:
             stats = compute_unit_stats(attacker)
             damage = stats["dps"] / TICKS_PER_SECOND
@@ -980,10 +1039,12 @@ def on_request_state():
 
 @socketio.on("update_units")
 def on_update_units(data):
-    sid = request.sid
+    pid = require_player_id()
+    if not pid:
+        return
     incoming = data.get("units", []) or []
 
-    p = players.get(sid)
+    p = players.get(pid)
     if not p:
         return
 
@@ -1017,22 +1078,26 @@ def on_update_units(data):
         p["x"] = float(units[0].get("x", p.get("x", 0)))
         p["y"] = float(units[0].get("y", p.get("y", 0)))
 
-    socketio.emit("update_units", {"sid": sid, "units": units})
+    socketio.emit("update_units", {"sid": pid, "units": units})
 
 
 
 
 @socketio.on("place_building")
 def place_building(data):
-    sid = request.sid
-    buildings.append({"x": data["x"], "y": data["y"], "owner": sid})
+    pid = require_player_id()
+    if not pid:
+        return
+    buildings.append({"x": data["x"], "y": data["y"], "owner": pid})
     emit_state()
 
 
 @socketio.on("unit_give_to_entity")
 def handle_unit_give_to_entity(data):
-    sid = request.sid
-    print(f"[unit_give_to_entity] called by sid={sid} data={data}", flush=True)
+    pid = require_player_id()
+    if not pid:
+        return
+    print(f"[unit_give_to_entity] called by player={pid} data={data}", flush=True)
     unit_id = data.get("unitId")
     unit_slot_index = int(data.get("unitSlotIndex", -1))
     entity_id = data.get("entityId")
@@ -1040,24 +1105,24 @@ def handle_unit_give_to_entity(data):
 
     if not unit_id or unit_slot_index < 0 or not entity_id or entity_slot_index < 0:
         print(f"[unit_give_to_entity] invalid args: unit_id={unit_id} unit_slot_index={unit_slot_index} entity_id={entity_id} entity_slot_index={entity_slot_index}", flush=True)
-        socketio.emit("server_debug", {"msg": "unit_give_to_entity: invalid args"}, to=sid)
+        socketio.emit("server_debug", {"msg": "unit_give_to_entity: invalid args"}, to=request.sid)
         return
 
-    u = find_unit(sid, unit_id)
+    u = find_unit(pid, unit_id)
     if not u:
-        print(f"[unit_give_to_entity] unit not found for sid={sid} unit_id={unit_id}", flush=True)
-        socketio.emit("server_debug", {"msg": "unit_give_to_entity: unit not owned by you"}, to=sid)
+        print(f"[unit_give_to_entity] unit not found for player={pid} unit_id={unit_id}", flush=True)
+        socketio.emit("server_debug", {"msg": "unit_give_to_entity: unit not owned by you"}, to=request.sid)
         return
 
     slots = u.get("itemSlots") or [None, None, None, None, None]
     if unit_slot_index >= len(slots):
         print(f"[unit_give_to_entity] unit_slot_index out of range: {unit_slot_index} >= {len(slots)}", flush=True)
-        socketio.emit("server_debug", {"msg": "unit_give_to_entity: slot index out of range"}, to=sid)
+        socketio.emit("server_debug", {"msg": "unit_give_to_entity: slot index out of range"}, to=request.sid)
         return
     item = slots[unit_slot_index]
     if not item:
         print(f"[unit_give_to_entity] no item in unit slot {unit_slot_index}", flush=True)
-        socketio.emit("server_debug", {"msg": "unit_give_to_entity: no item in that slot"}, to=sid)
+        socketio.emit("server_debug", {"msg": "unit_give_to_entity: no item in that slot"}, to=request.sid)
         return
 
     # find entity
@@ -1065,7 +1130,7 @@ def handle_unit_give_to_entity(data):
         ent = next((m for m in map_objects if m.get("id") == entity_id), None)
         if not ent:
             print(f"[unit_give_to_entity] entity not found: {entity_id}", flush=True)
-            socketio.emit("server_debug", {"msg": "unit_give_to_entity: entity not found"}, to=sid)
+            socketio.emit("server_debug", {"msg": "unit_give_to_entity: entity not found"}, to=request.sid)
             return
         eslots = ent.get("itemSlots") or []
         # expand if needed
@@ -1073,7 +1138,7 @@ def handle_unit_give_to_entity(data):
             eslots += [None] * (entity_slot_index + 1 - len(eslots))
         if eslots[entity_slot_index] is not None:
             print(f"[unit_give_to_entity] entity slot occupied: {entity_slot_index}", flush=True)
-            socketio.emit("server_debug", {"msg": "unit_give_to_entity: entity slot already occupied"}, to=sid)
+            socketio.emit("server_debug", {"msg": "unit_give_to_entity: entity slot already occupied"}, to=request.sid)
             return
         # transfer
         eslots[entity_slot_index] = item
@@ -1084,17 +1149,19 @@ def handle_unit_give_to_entity(data):
         save_map()
 
     print(f"[unit_give_to_entity] transfer success: unit {unit_id} slot {unit_slot_index} -> entity {entity_id} slot {entity_slot_index}", flush=True)
-    socketio.emit("server_debug", {"msg": "unit_give_to_entity: transfer success"}, to=sid)
+    socketio.emit("server_debug", {"msg": "unit_give_to_entity: transfer success"}, to=request.sid)
 
     # notify clients
     socketio.emit("map_objects", map_objects)
-    socketio.emit("unit_slots_update", {"unitId": unit_id, "itemSlots": slots}, to=sid)
+    socketio.emit("unit_slots_update", {"unitId": unit_id, "itemSlots": slots}, to=request.sid)
 
 
 @socketio.on("ground_give_to_entity")
 def handle_ground_give_to_entity(data):
-    sid = request.sid
-    print(f"[ground_give_to_entity] called by sid={sid} data={data}", flush=True)
+    pid = require_player_id()
+    if not pid:
+        return
+    print(f"[ground_give_to_entity] called by player={pid} data={data}", flush=True)
     entity_id = data.get("entityId")
     try:
         entity_slot_index = int(data.get("entitySlotIndex", -1))
@@ -1104,14 +1171,14 @@ def handle_ground_give_to_entity(data):
 
     if not entity_id or entity_slot_index < 0 or not ground_id:
         print(f"[ground_give_to_entity] invalid args: entity_id={entity_id} slot={entity_slot_index} ground_id={ground_id}", flush=True)
-        socketio.emit("server_debug", {"msg": "ground_give_to_entity: invalid args"}, to=sid)
+        socketio.emit("server_debug", {"msg": "ground_give_to_entity: invalid args"}, to=request.sid)
         return
 
     # find ground item
     gi_index = next((i for i, g in enumerate(ground_items) if g.get("id") == ground_id), None)
     if gi_index is None:
         print(f"[ground_give_to_entity] ground item not found: {ground_id}", flush=True)
-        socketio.emit("server_debug", {"msg": "ground_give_to_entity: ground item not found"}, to=sid)
+        socketio.emit("server_debug", {"msg": "ground_give_to_entity: ground item not found"}, to=request.sid)
         return
 
     gi = ground_items[gi_index]
@@ -1121,7 +1188,7 @@ def handle_ground_give_to_entity(data):
         ent = next((m for m in map_objects if m.get("id") == entity_id), None)
         if not ent:
             print(f"[ground_give_to_entity] entity not found: {entity_id}", flush=True)
-            socketio.emit("server_debug", {"msg": "ground_give_to_entity: entity not found"}, to=sid)
+            socketio.emit("server_debug", {"msg": "ground_give_to_entity: entity not found"}, to=request.sid)
             return
 
         eslots = ent.get("itemSlots") or []
@@ -1129,7 +1196,7 @@ def handle_ground_give_to_entity(data):
             eslots += [None] * (entity_slot_index + 1 - len(eslots))
         if eslots[entity_slot_index] is not None:
             print(f"[ground_give_to_entity] entity slot occupied: {entity_slot_index}", flush=True)
-            socketio.emit("server_debug", {"msg": "ground_give_to_entity: entity slot occupied"}, to=sid)
+            socketio.emit("server_debug", {"msg": "ground_give_to_entity: entity slot occupied"}, to=request.sid)
             return
 
         # transfer ground item into entity slot, preserving any upgrade bonus
@@ -1150,7 +1217,7 @@ def handle_ground_give_to_entity(data):
         save_map()
 
     print(f"[ground_give_to_entity] success: ground {ground_id} -> entity {entity_id} slot {entity_slot_index}", flush=True)
-    socketio.emit("server_debug", {"msg": "ground_give_to_entity: transfer success"}, to=sid)
+    socketio.emit("server_debug", {"msg": "ground_give_to_entity: transfer success"}, to=request.sid)
 
     # notify clients
     socketio.emit("map_objects", map_objects)
@@ -1159,7 +1226,9 @@ def handle_ground_give_to_entity(data):
 
 @socketio.on("smith_upgrade_item")
 def handle_smith_upgrade_item(data):
-    sid = request.sid
+    pid = require_player_id()
+    if not pid:
+        return
     entity_id = data.get("entityId")
     try:
         slot_index = int(data.get("slotIndex", 0))
@@ -1168,29 +1237,29 @@ def handle_smith_upgrade_item(data):
 
     cost_blue = 3
 
-    p = players.get(sid)
+    p = players.get(pid)
     if not p:
-        socketio.emit("smith_upgrade_result", {"entityId": entity_id, "success": False, "error": "Player not found"}, to=sid)
-        socketio.emit("server_debug", {"msg": "Player not found for smith upgrade"}, to=sid)
+        socketio.emit("smith_upgrade_result", {"entityId": entity_id, "success": False, "error": "Player not found"}, to=request.sid)
+        socketio.emit("server_debug", {"msg": "Player not found for smith upgrade"}, to=request.sid)
         return
     if p.get("resources", {}).get("blue", 0) < cost_blue:
-        socketio.emit("smith_upgrade_result", {"entityId": entity_id, "success": False, "error": "Not enough blue (3)"}, to=sid)
-        socketio.emit("server_debug", {"msg": "Not enough blue resources to upgrade item (requires 3)"}, to=sid)
+        socketio.emit("smith_upgrade_result", {"entityId": entity_id, "success": False, "error": "Not enough blue (3)"}, to=request.sid)
+        socketio.emit("server_debug", {"msg": "Not enough blue resources to upgrade item (requires 3)"}, to=request.sid)
         return
 
     with map_lock:
         ent = next((m for m in map_objects if m.get("id") == entity_id), None)
         if not ent:
-            socketio.emit("smith_upgrade_result", {"entityId": entity_id, "success": False, "error": "Blacksmith not found"}, to=sid)
-            socketio.emit("server_debug", {"msg": "Blacksmith not found"}, to=sid)
+            socketio.emit("smith_upgrade_result", {"entityId": entity_id, "success": False, "error": "Blacksmith not found"}, to=request.sid)
+            socketio.emit("server_debug", {"msg": "Blacksmith not found"}, to=request.sid)
             return
         if ent.get("kind") != "blacksmith":
-            socketio.emit("smith_upgrade_result", {"entityId": entity_id, "success": False, "error": "Upgrade allowed only on blacksmith"}, to=sid)
-            socketio.emit("server_debug", {"msg": "Upgrade allowed only on blacksmith"}, to=sid)
+            socketio.emit("smith_upgrade_result", {"entityId": entity_id, "success": False, "error": "Upgrade allowed only on blacksmith"}, to=request.sid)
+            socketio.emit("server_debug", {"msg": "Upgrade allowed only on blacksmith"}, to=request.sid)
             return
-        if ent.get("owner") and ent.get("owner") != sid:
-            socketio.emit("smith_upgrade_result", {"entityId": entity_id, "success": False, "error": "Only the owner can use this blacksmith"}, to=sid)
-            socketio.emit("server_debug", {"msg": "Only the owner can use this blacksmith"}, to=sid)
+        if ent.get("owner") and ent.get("owner") != pid:
+            socketio.emit("smith_upgrade_result", {"entityId": entity_id, "success": False, "error": "Only the owner can use this blacksmith"}, to=request.sid)
+            socketio.emit("server_debug", {"msg": "Only the owner can use this blacksmith"}, to=request.sid)
             return
 
         slots = ent.get("itemSlots") or []
@@ -1198,13 +1267,13 @@ def handle_smith_upgrade_item(data):
         if len(slots) == 0:
             slots = [None]
         if slot_index < 0 or slot_index >= len(slots):
-            socketio.emit("smith_upgrade_result", {"entityId": entity_id, "success": False, "error": "Blacksmith slot unavailable"}, to=sid)
-            socketio.emit("server_debug", {"msg": "Blacksmith slot unavailable"}, to=sid)
+            socketio.emit("smith_upgrade_result", {"entityId": entity_id, "success": False, "error": "Blacksmith slot unavailable"}, to=request.sid)
+            socketio.emit("server_debug", {"msg": "Blacksmith slot unavailable"}, to=request.sid)
             return
         item = slots[slot_index]
         if not item:
-            socketio.emit("smith_upgrade_result", {"entityId": entity_id, "success": False, "error": "Place an item into the blacksmith slot first"}, to=sid)
-            socketio.emit("server_debug", {"msg": "Place an item into the blacksmith slot first"}, to=sid)
+            socketio.emit("smith_upgrade_result", {"entityId": entity_id, "success": False, "error": "Place an item into the blacksmith slot first"}, to=request.sid)
+            socketio.emit("server_debug", {"msg": "Place an item into the blacksmith slot first"}, to=request.sid)
             return
 
         # normalize legacy items that may be plain strings
@@ -1232,13 +1301,15 @@ def handle_smith_upgrade_item(data):
     # broadcast updated map and state (for resource counts)
     socketio.emit("map_objects", map_objects)
     emit_state()
-    socketio.emit("server_debug", {"msg": f"Upgraded item to bonus +{new_bonus}"}, to=sid)
-    socketio.emit("smith_upgrade_result", {"entityId": entity_id, "success": True, "bonus": new_bonus}, to=sid)
+    socketio.emit("server_debug", {"msg": f"Upgraded item to bonus +{new_bonus}"}, to=request.sid)
+    socketio.emit("smith_upgrade_result", {"entityId": entity_id, "success": True, "bonus": new_bonus}, to=request.sid)
 
 
 @socketio.on("entity_give_to_unit")
 def handle_entity_give_to_unit(data):
-    sid = request.sid
+    pid = require_player_id()
+    if not pid:
+        return
     entity_id = data.get("entityId")
     entity_slot_index = int(data.get("entitySlotIndex", -1))
     unit_id = data.get("unitId")
@@ -1247,10 +1318,10 @@ def handle_entity_give_to_unit(data):
     if not unit_id or unit_slot_index < 0 or not entity_id or entity_slot_index < 0:
         return
 
-    p = players.get(sid)
+    p = players.get(pid)
     if not p: return
 
-    u = find_unit(sid, unit_id)
+    u = find_unit(pid, unit_id)
     if not u: return
 
     with map_lock:
@@ -1279,12 +1350,14 @@ def handle_entity_give_to_unit(data):
 
     # notify clients
     socketio.emit("map_objects", map_objects)
-    socketio.emit("unit_slots_update", {"unitId": unit_id, "itemSlots": uslots}, to=sid)
+    socketio.emit("unit_slots_update", {"unitId": unit_id, "itemSlots": uslots}, to=request.sid)
 
 
 @socketio.on("entity_give_to_ground")
 def handle_entity_give_to_ground(data):
-    sid = request.sid
+    pid = require_player_id()
+    if not pid:
+        return
     entity_id = data.get("entityId")
     try:
         entity_slot_index = int(data.get("entitySlotIndex", -1))
@@ -1295,24 +1368,24 @@ def handle_entity_give_to_ground(data):
 
     if not entity_id or entity_slot_index < 0 or x is None or y is None:
         print(f"[entity_give_to_ground] invalid args: entity_id={entity_id} slot={entity_slot_index} x={x} y={y}", flush=True)
-        socketio.emit("server_debug", {"msg": "entity_give_to_ground: invalid args"}, to=sid)
+        socketio.emit("server_debug", {"msg": "entity_give_to_ground: invalid args"}, to=request.sid)
         return
 
     with map_lock:
         ent = next((m for m in map_objects if m.get("id") == entity_id), None)
         if not ent:
             print(f"[entity_give_to_ground] entity not found: {entity_id}", flush=True)
-            socketio.emit("server_debug", {"msg": "entity_give_to_ground: entity not found"}, to=sid)
+            socketio.emit("server_debug", {"msg": "entity_give_to_ground: entity not found"}, to=request.sid)
             return
         eslots = ent.get("itemSlots") or []
         if entity_slot_index >= len(eslots):
             print(f"[entity_give_to_ground] slot index out of range: {entity_slot_index}", flush=True)
-            socketio.emit("server_debug", {"msg": "entity_give_to_ground: slot index out of range"}, to=sid)
+            socketio.emit("server_debug", {"msg": "entity_give_to_ground: slot index out of range"}, to=request.sid)
             return
         item = eslots[entity_slot_index]
         if not item:
             print(f"[entity_give_to_ground] no item in slot {entity_slot_index}", flush=True)
-            socketio.emit("server_debug", {"msg": "entity_give_to_ground: no item in that slot"}, to=sid)
+            socketio.emit("server_debug", {"msg": "entity_give_to_ground: no item in that slot"}, to=request.sid)
             return
 
         # remove from entity slot
@@ -1336,7 +1409,7 @@ def handle_entity_give_to_ground(data):
         save_map()
 
     print(f"[entity_give_to_ground] success: entity {entity_id} slot {entity_slot_index} -> ground {gi['id']}", flush=True)
-    socketio.emit("server_debug", {"msg": "entity_give_to_ground: transfer success"}, to=sid)
+    socketio.emit("server_debug", {"msg": "entity_give_to_ground: transfer success"}, to=request.sid)
 
     # notify clients
     socketio.emit("map_objects", map_objects)

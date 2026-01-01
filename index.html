@@ -2,8 +2,9 @@
   <html>
   <head>
   <meta charset="utf-8">
-  <title>Isometric Multiplayer RTS</title>
+  <title>AOE Online</title>
   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
   <style>
   html, body { margin:0; padding:0; overflow:hidden; background:black; }
   canvas { display:block; }
@@ -12,9 +13,6 @@
     top:10px; left:10px;
     color:white;
     font-family:monospace;
-      const stats = (typeof getUnitStats === "function") ? getUnitStats(u) : { maxHp: UNIT_MAX_HEALTH };
-      u.maxHp = stats.maxHp || UNIT_MAX_HEALTH;
-      if (typeof u.hp !== "number") u.hp = u.maxHp; // initialize if missing
     padding:6px;
   }
   #panel {
@@ -60,18 +58,27 @@
   </head>
 
   <body>
+    <div id="loginScreen" style="position:fixed; inset:0; background:rgba(0,0,0,0.9); display:flex; align-items:center; justify-content:center; z-index:20000;">
+      <div style="width:320px; background:rgba(20,20,20,0.9); border:2px solid #555; border-radius:10px; padding:18px; font-family:monospace; color:white; box-shadow:0 10px 30px rgba(0,0,0,0.6);">
+        <div style="font-size:18px; font-weight:bold; margin-bottom:8px; text-align:center;">Enter Username</div>
+        <div style="font-size:12px; opacity:0.8; margin-bottom:10px; text-align:center;">Reconnect with the same name to keep your progress.</div>
+        <input id="loginName" style="width:100%; height:38px; border-radius:6px; border:1px solid #777; padding:0 10px; background:#111; color:white; font-family:monospace;" placeholder="Your name" maxlength="32" />
+        <button id="loginBtn" style="margin-top:10px; width:100%; height:40px; border-radius:6px; border:1px solid #08f; background:linear-gradient(90deg,#0af,#08f); color:white; font-weight:bold; cursor:pointer;">Play</button>
+        <div id="loginStatus" style="min-height:18px; margin-top:10px; font-size:12px; color:#ff8888; text-align:center;"></div>
+      </div>
+    </div>
   <canvas id="game"></canvas>
   <div id="hud"></div>
 
   <div id="panel">
-    <div>Unit Selected</div>
+    <div>Buidlings</div>
     <button id="buildBtn">Place Town Center</button>
     <button id="mineBtn">Place Mine</button>
     <button id="blacksmithBtn">Place Blacksmith</button>
   </div>
 
-  <div id="buildingPanel" style="display:none; position:fixed; bottom:20px; left:20px; width:220px; height:120px; background:rgba(30,30,30,0.85); border:2px solid #888; padding:10px; color:white; font-family:monospace;">
-    <div>Town Center Selected</div>
+  <div id="buildingPanel" style="display:block; position:fixed; bottom:20px; left:20px; width:220px; height:120px; background:rgba(30,30,30,0.85); border:2px solid #888; padding:10px; color:white; font-family:monospace;">
+    <div>Town Center Controls</div>
     <button id="createUnitBtn">Create Unit</button>
   </div>
 
@@ -98,15 +105,25 @@
     z-index:1000;
   ">
     <button id="editorBtn" style="width:100%; height:36px;">Editor: OFF</button>
-  <div style="margin-top:10px;">
+    <button id="collisionBtn" style="width:100%; height:32px; margin-top:8px;">Collision Debug: OFF</button>
+    <div id="editorControls" style="margin-top:10px; display:none;">
     <div>Brush:</div>
     <select id="brushSelect" style="width:100%; height:30px;">
       <option value="" disabled selected>Loading tiles…</option>
     </select>
+    <div style="margin-top:8px; display:flex; gap:6px; align-items:center;">
+      <label for="zOrderInput" style="font-size:12px;">Z order</label>
+      <input id="zOrderInput" type="number" value="0" step="1" style="flex:1; height:28px; background:#111; color:#fff; border:1px solid #555; padding:0 6px;" />
+    </div>
+    <div id="editorStats" style="margin-top:8px; font-size:12px; line-height:1.4; opacity:0.85;">
+      <div>Tile: <span id="statTileSize">-</span></div>
+      <div>Z: <span id="statZ">-</span></div>
+      <div>Coll: <span id="statColl">-</span></div>
+    </div>
     <div style="margin-top:10px; font-size:12px; opacity:0.9;">
       Left click: place<br/>
       Shift+Left click: delete<br/>
-      c: toggle collision<br/>
+      c: toggle collision for object<br/>
       Scroll: collision size<br/>
       Shift+Scroll: tile size 
     </div>
@@ -261,6 +278,8 @@
   let editorCollisionEnabled = true;
   let editorCollisionW = 64;
   let editorCollisionH = 64;
+  let editorCollisionOffsetX = 0;
+  let editorCollisionOffsetY = 0;
 
   // Global variables
   let camera = {x:0,y:0};
@@ -276,14 +295,14 @@
   let hoveredGroundItem = null;
   let hoveredPlayerSid = null;
   let hoveredAttackEntity = null;
+  let draggingPickup = null;
+  let selectedUnits = [];
+  let allUnits = {};
   let dragMouse = {x:0,y:0};
-  let selecting = false;
-  let selectStart = {x:0,y:0};
   let mouse = {x:0,y:0};
   let buildMode = false;
   let localBuildingPlaced = false;
     let mineMode = false;
-    let localMinePlaced = false;
     let blacksmithMode = false;
     let localBlacksmithPlaced = false;
   const socket = io({autoConnect: false});
@@ -321,6 +340,39 @@
   const BUILD_LIMIT = 1;
   // Cost in resources to place a town center
   const TOWN_CENTER_COST = 5;
+
+  // --- LOGIN UI ---
+  const loginScreen = document.getElementById("loginScreen");
+  const loginNameInput = document.getElementById("loginName");
+  const loginBtn = document.getElementById("loginBtn");
+  const loginStatus = document.getElementById("loginStatus");
+
+  let mySid = null;
+  let currentUsername = null;
+  const savedName = localStorage.getItem("aoe_username");
+  if (savedName && loginNameInput) loginNameInput.value = savedName;
+
+  function beginLogin() {
+    const name = (loginNameInput?.value || "").trim();
+    if (!name) {
+      if (loginStatus) loginStatus.textContent = "Enter a username";
+      return;
+    }
+    currentUsername = name;
+    if (loginStatus) loginStatus.textContent = "Connecting...";
+    if (loginBtn) loginBtn.disabled = true;
+    socket.auth = { username: name };
+    if (socket.connected) {
+      socket.emit("login", { username: name });
+    } else {
+      socket.connect();
+    }
+  }
+
+  loginBtn?.addEventListener("click", beginLogin);
+  loginNameInput?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") beginLogin();
+  });
   </script>
 
   <script src="static/input.js"></script>
@@ -374,7 +426,7 @@
   const entityCloseBtn = document.getElementById("entityCloseBtn");
 
   let selectedEntityId = null;
-  let draggingPickup = null;
+  draggingPickup = null;
 
   if (entityCloseBtn) {
     entityCloseBtn.onclick = () => {
@@ -385,13 +437,51 @@
     };
   }
 
-  let mySid = null;
   socket.on("connect", () => {
-    mySid = socket.id;
+    if (currentUsername) {
+      if (loginStatus) loginStatus.textContent = "Logging in...";
+      socket.emit("login", { username: currentUsername });
+    }
+  });
 
-    // ✅ request initial map after connection is established
+  socket.on("login_success", ({ playerId }) => {
+    mySid = playerId;
+    currentUsername = playerId;
+    localStorage.setItem("aoe_username", playerId);
+    if (loginStatus) loginStatus.textContent = "";
+    if (loginScreen) loginScreen.style.display = "none";
+    if (loginBtn) loginBtn.disabled = false;
+    // ✅ request initial map and state once authenticated
     socket.emit("request_state");
     socket.emit("request_map");
+  });
+
+  socket.on("login_error", (payload) => {
+    mySid = null;
+    if (loginStatus) loginStatus.textContent = (payload && payload.msg) || "Login failed";
+    if (loginBtn) loginBtn.disabled = false;
+  });
+
+  socket.on("login_required", () => {
+    mySid = null;
+    if (loginScreen) loginScreen.style.display = "flex";
+    // if we already have a username and are connected, retry login
+    if (currentUsername && socket.connected) {
+      if (loginStatus) loginStatus.textContent = "Logging in...";
+      socket.emit("login", { username: currentUsername });
+    }
+  });
+
+  socket.on("disconnect", () => {
+    mySid = null;
+    if (loginScreen) loginScreen.style.display = "flex";
+    if (loginBtn) loginBtn.disabled = false;
+    if (loginStatus) loginStatus.textContent = "Disconnected";
+  });
+
+  socket.on("connect_error", (err) => {
+    if (loginStatus) loginStatus.textContent = err?.message || "Connection error";
+    if (loginBtn) loginBtn.disabled = false;
   });
 
 
@@ -402,7 +492,7 @@
   window.addEventListener("resize", resize);
   resize();
 
-  let DEBUG_COLLISIONS = true; // toggle on/off
+  let DEBUG_COLLISIONS = false; // toggle on/off
 
 
   function setEntityInspectorEditable(canEdit) {
@@ -1520,9 +1610,6 @@
     }
   });
 
-
-  let selectedUnits = []; // Array of selected unit IDs
-  let allUnits = {}; // sid -> units list (updated from server)
 
   // Function to render selected units in panel
   function renderUnitPanel() {

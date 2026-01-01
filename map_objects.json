@@ -35,29 +35,6 @@
     }
   },
   {
-    "id": "a9aa5b4b-1a0b-4f0a-8126-c177abc249f6",
-    "type": "tile",
-    "kind": "town_center",
-    "x": -687.5,
-    "y": 101.5,
-    "meta": {
-      "entity": true,
-      "title": "Building",
-      "bio": "",
-      "actions": [],
-      "collides": true,
-      "cw": 256,
-      "ch": 256,
-      "w": 256,
-      "h": 256
-    },
-    "owner": "Co89OZyPn6zcFqRFAAAD",
-    "itemSlots": [
-      null
-    ],
-    "hp": 144.0
-  },
-  {
     "id": "62c9fdf2-a784-4b5d-953a-4b5cdf9ef0cf",
     "type": "tile",
     "kind": "chestClosed_E",
@@ -113,69 +90,27 @@
     "itemSlots": []
   },
   {
-    "id": "c8675a6e-aa03-448b-b3ad-500636a4db4e",
+    "id": "6611b917-fa0b-4c1f-a70d-0b22d3d511cb",
     "type": "tile",
-    "kind": "Earth Patch - Rough - Brown - 3x3",
-    "x": -361.0,
-    "y": 167.5,
+    "kind": "campfire",
+    "x": -119.0,
+    "y": 87.30800006866457,
     "meta": {
-      "collides": false,
-      "cw": 88,
-      "ch": 88,
-      "w": 470,
-      "h": 278
-    },
-    "owner": "wYxeMLzh1vAZ1qiuAAAD",
-    "itemSlots": []
-  },
-  {
-    "id": "87a8935e-3f99-48f7-aa08-19ea2f68c3e7",
-    "type": "tile",
-    "kind": "Earth Patch - Rough - Brown - 3x3",
-    "x": 204.0,
-    "y": 47.5,
-    "meta": {
-      "collides": false,
-      "cw": 88,
-      "ch": 88,
-      "w": 406,
-      "h": 240
-    },
-    "owner": "wYxeMLzh1vAZ1qiuAAAD",
-    "itemSlots": []
-  },
-  {
-    "id": "6033a33d-9584-4cfa-a37d-89458092324d",
-    "type": "tile",
-    "kind": "mine",
-    "x": -625.0,
-    "y": 476.5,
-    "meta": {
-      "entity": true,
-      "title": "Mine",
-      "bio": "",
-      "actions": [],
       "collides": true,
-      "cw": 256,
-      "ch": 256,
-      "w": 256,
-      "h": 256,
-      "mine": {
-        "resource": "red"
-      },
-      "interval": 30,
-      "nextTick": 1766663727.5926807
+      "cw": 64,
+      "ch": 64,
+      "w": 192,
+      "h": 172
     },
-    "owner": "SEFd3L95rvoUgNJ2AAAD",
-    "itemSlots": [],
-    "hp": 300
+    "owner": "Diomdes246",
+    "itemSlots": []
   },
   {
-    "id": "e675d0b5-dada-44f3-a734-b368b306acdf",
+    "id": "127f4022-9f8b-444d-a82a-41a794f07754",
     "type": "tile",
     "kind": "mine",
-    "x": -1784.0,
-    "y": -627.5,
+    "x": -529.7199998283362,
+    "y": 58.923999862671224,
     "meta": {
       "entity": true,
       "title": "Mine",
@@ -190,10 +125,80 @@
         "resource": "blue"
       },
       "interval": 30,
-      "nextTick": 1766663727.5926807
+      "nextTick": 1767271833.4421947
     },
-    "owner": "WU2vYKK8NfZIbyZcAAAD",
+    "owner": "Diomdes246",
     "itemSlots": [],
     "hp": 300
+  },
+  {
+    "id": "2b82d992-19e7-4092-954a-6192f366135b",
+    "type": "tile",
+    "kind": "blacksmith",
+    "x": -601.4639998626654,
+    "y": 323.81199975967434,
+    "meta": {
+      "entity": true,
+      "title": "Blacksmith",
+      "bio": "",
+      "actions": [],
+      "collides": true,
+      "cw": 256,
+      "ch": 256,
+      "w": 256,
+      "h": 256
+    },
+    "owner": "Diomdes246",
+    "itemSlots": [
+      null
+    ],
+    "hp": 300
+  },
+  {
+    "id": "96182351-2cc4-4f14-93fa-066e1e7369ad",
+    "type": "tile",
+    "kind": "mine",
+    "x": -834.1279998970036,
+    "y": 144.5399998283395,
+    "meta": {
+      "entity": true,
+      "title": "Mine",
+      "bio": "",
+      "actions": [],
+      "collides": true,
+      "cw": 256,
+      "ch": 256,
+      "w": 256,
+      "h": 256,
+      "mine": {
+        "resource": "green"
+      },
+      "interval": 30,
+      "nextTick": 1767271833.4421947
+    },
+    "owner": "Diomdes246",
+    "itemSlots": [],
+    "hp": 300
+  },
+  {
+    "id": "5f132455-c6fa-40c8-a33c-4fbfc527d20a",
+    "type": "tile",
+    "kind": "town_center",
+    "x": -753.0640002059936,
+    "y": -133.14000017166046,
+    "meta": {
+      "entity": true,
+      "title": "Building",
+      "bio": "",
+      "actions": [],
+      "collides": true,
+      "cw": 256,
+      "ch": 256,
+      "w": 256,
+      "h": 256
+    },
+    "owner": "Diomdes246",
+    "itemSlots": [],
+    "hp": 500
   }
 ]

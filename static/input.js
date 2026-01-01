@@ -1,8 +1,32 @@
 // Input logic moved from index.html
 
+// Ensure collision debug flag exists even if scripts load out of order
+if (typeof DEBUG_COLLISIONS === "undefined") {
+  window.DEBUG_COLLISIONS = false;
+}
+
+function getCurrentZOrder() {
+  const zInput = document.getElementById("zOrderInput");
+  const v = parseInt(zInput && zInput.value, 10);
+  return Number.isFinite(v) ? v : 0;
+}
+
+function resetCollisionOffset() {
+  editorCollisionOffsetX = 0;
+  editorCollisionOffsetY = 0;
+}
+
+// Small helper to mirror formation offsets from update.js
+function getUnitTargetOffsetClient(idx, total) {
+  const angle = (idx / Math.max(1, total)) * Math.PI * 2;
+  const radius = Math.max(8, total * 10);
+  return { dx: Math.cos(angle) * radius, dy: Math.sin(angle) * radius };
+}
+
 /* ================= CAMERA ================= */
 const camSpeed = 12;
-const keys = {};
+if (typeof window.keys === "undefined") window.keys = {};
+var keys = window.keys;
 document.addEventListener("keydown", (e) => {
   keys[e.key] = true;
 
@@ -10,11 +34,41 @@ document.addEventListener("keydown", (e) => {
   if (!e.repeat && editorMode && (e.key === "c" || e.key === "C")) {
     editorCollisionEnabled = !editorCollisionEnabled;
   }
+
+  // Nudge collision center with arrow keys while in editor (fixed 1px step)
+  if (editorMode && ["ArrowLeft","ArrowRight","ArrowUp","ArrowDown"].includes(e.key)) {
+    const step = 1;
+    if (e.key === "ArrowLeft") editorCollisionOffsetX -= step;
+    if (e.key === "ArrowRight") editorCollisionOffsetX += step;
+    if (e.key === "ArrowUp") editorCollisionOffsetY -= step;
+    if (e.key === "ArrowDown") editorCollisionOffsetY += step;
+    e.preventDefault();
+  }
 });
 
 document.addEventListener("keyup", (e) => {
   keys[e.key] = false;
 });
+
+// Collision debug toggle button
+const collisionBtn = document.getElementById("collisionBtn");
+if (collisionBtn) {
+  const updateCollisionLabel = () => {
+    collisionBtn.textContent = DEBUG_COLLISIONS ? "Collision Debug: ON" : "Collision Debug: OFF";
+  };
+  updateCollisionLabel();
+  collisionBtn.onclick = () => {
+    DEBUG_COLLISIONS = !DEBUG_COLLISIONS;
+    updateCollisionLabel();
+  };
+}
+
+// Guard against double-loading: keep selection state on window and use var to tolerate reinjection
+if (typeof window.selectStart === "undefined") window.selectStart = { x: 0, y: 0 };
+if (typeof window.selecting === "undefined") window.selecting = false;
+var selectStart = window.selectStart;
+var selecting = window.selecting;
+const MIN_DRAG_DIST_SQ = 25; // tiny threshold so clicks don't trigger box selection
 
 canvas.addEventListener("mousemove", e=>{
   mouse.x = e.clientX;
@@ -51,7 +105,26 @@ canvas.addEventListener("mousemove", e=>{
     }
   }
 
-  // Player hover (priority 2)
+  // Enemy unit hover (priority 2) for attack cursor
+  hoveredAttackEntity = null;
+  for (const sid in players) {
+    if (sid === mySid) continue;
+    const p = players[sid];
+    if (p?.units) {
+      for (let i = p.units.length - 1; i >= 0; i--) {
+        const u = p.units[i];
+        if (!u || (u.hp ?? 0) <= 0) continue;
+        if (Math.hypot(u.x - wx, u.y - wy) < 20) {
+          hoveredAttackEntity = { x: u.x, y: u.y, owner: sid, meta: { entity: true, cw: 40, ch: 40 }, kind: 'unit', type: 'unit', id: u.id };
+          canvas.style.cursor = 'crosshair';
+          hoveredPlayerSid = sid;
+          return;
+        }
+      }
+    }
+  }
+
+  // Player hover (priority 3) - fallback to player dot
   for(const sid in players){
     if(sid === mySid) continue;
     const p = players[sid];
@@ -62,17 +135,13 @@ canvas.addEventListener("mousemove", e=>{
     }
   }
 
-  // Entity hover (priority 3) - show attack hover for enemy entities
-  hoveredAttackEntity = null;
+  // Enemy entity hover (priority 4) - buildings/town centers/mines/blacksmiths
   for (let i = (mapObjects || []).length - 1; i >= 0; i--) {
     const o = mapObjects[i];
     if (!o || !o.meta || !o.meta.entity) continue;
-    // only consider enemy-owned entities
     if (o.owner === mySid) continue;
-    // only buildings, town centers, or mines are attackable
-    if (!(o.type === 'building' || o.kind === 'town_center' || o.kind === 'mine')) continue;
+    if (!(o.type === 'building' || o.kind === 'town_center' || o.kind === 'mine' || o.kind === 'blacksmith')) continue;
 
-    // compute collision extents
     let w = BUILD_W, h = BUILD_H;
     if (o.type === 'building') { w = BUILD_W; h = BUILD_H; }
     else { const def = TILE_DEFS[o.kind] || { w: 256, h: 256 }; w = o.meta?.w ?? def.w; h = o.meta?.h ?? def.h; }
@@ -269,8 +338,11 @@ let meta = (type === "tile") ? {
   collides: editorCollisionEnabled,
   cw: editorCollisionW,
   ch: editorCollisionH,
+  cx: editorCollisionOffsetX,
+  cy: editorCollisionOffsetY,
   w: editorTileW,
-  h: editorTileH
+  h: editorTileH,
+  z: getCurrentZOrder()
 } : {};
 
 if (entityMode) {
@@ -279,11 +351,13 @@ if (entityMode) {
     entity: true,
     title: (type === "tile") ? prettyName(kind) : "Building",
     bio: "",
-    actions: []
+    actions: [],
+    z: getCurrentZOrder()
   };
 }
 
 socket.emit("place_map_object", { type, kind, x: wx, y: wy, meta });
+resetCollisionOffset();
 
     return;
   }
@@ -311,25 +385,28 @@ socket.emit("place_map_object", { type, kind, x: wx, y: wy, meta });
       collides: true,
       cw: BUILD_W,
       ch: BUILD_H,
+      cx: editorCollisionOffsetX,
+      cy: editorCollisionOffsetY,
       w: BUILD_W,
-      h: BUILD_H
+      h: BUILD_H,
+      z: getCurrentZOrder()
     };
     socket.emit("place_map_object", { type: "tile", kind: "town_center", x: wx, y: wy, meta });
+    resetCollisionOffset();
     return;
   }
 
     // ===== Mine placement =====
-    if (mineMode && !localMinePlaced) {
+    if (mineMode) {
       const mineCost = 3;
       try { console.log('MINE: attempting placement'); } catch(e){}
       if (((window.resourceCounts && window.resourceCounts.blue) || 0) < mineCost) {
-        try { mineMode = false; localMinePlaced = false; mineBtn.disabled = false; } catch(e){}
+        try { mineMode = false; mineBtn.disabled = false; } catch(e){}
         alert(`Not enough blue resources to build Mine (requires ${mineCost})`);
         return;
       }
-      localMinePlaced = true;
       mineMode = false;
-      try { mineBtn.disabled = true; } catch(e){}
+      try { mineBtn.disabled = false; } catch(e){}
       const meta = {
         entity: true,
         title: "Mine",
@@ -338,10 +415,14 @@ socket.emit("place_map_object", { type, kind, x: wx, y: wy, meta });
         collides: true,
         cw: MINE_W,
         ch: MINE_H,
+        cx: editorCollisionOffsetX,
+        cy: editorCollisionOffsetY,
         w: MINE_W,
-        h: MINE_H
+        h: MINE_H,
+        z: getCurrentZOrder()
       };
       socket.emit("place_map_object", { type: "tile", kind: "mine", x: wx, y: wy, meta });
+      resetCollisionOffset();
       return;
     }
 
@@ -365,44 +446,40 @@ socket.emit("place_map_object", { type, kind, x: wx, y: wy, meta });
         collides: true,
         cw: BLACKSMITH_W,
         ch: BLACKSMITH_H,
+        cx: editorCollisionOffsetX,
+        cy: editorCollisionOffsetY,
         w: BLACKSMITH_W,
-        h: BLACKSMITH_H
+        h: BLACKSMITH_H,
+        z: getCurrentZOrder()
       };
       socket.emit("place_map_object", { type: "tile", kind: "blacksmith", x: wx, y: wy, meta });
-      return;
-    }
-
-    // ===== Check for building click =====
-    let clickedBuilding = null;
-    for (const b of buildings) {
-      const bx = canvas.width / 2 + b.x - camera.x;
-      const by = canvas.height / 2 + b.y - camera.y;
-      const dx = Math.abs(mouse.x - bx);
-      const dy = Math.abs(mouse.y - by);
-      if (dx < BUILD_W / 2 && dy < BUILD_H / 2) {
-        clickedBuilding = b;
-        break;
-      }
-    }
-
-    if (clickedBuilding && clickedBuilding.owner === mySid) {
-      buildings.forEach(b => b.selected = false);
-      clickedBuilding.selected = true;
-      buildingPanel.style.display = "block";
-      panel.style.display = "none";
-      selecting = false;
-      updateSelectedUnits(); // <-- sync panel
+      resetCollisionOffset();
       return;
     }
 
     // ===== Check for unit click =====
     let clickedUnit = null;
+    let bestDist = Infinity;
+    // Screen-space pick first (larger radius)
     for (const u of myUnits) {
       const ux = canvas.width / 2 + u.x - camera.x;
       const uy = canvas.height / 2 + u.y - camera.y;
-      if (Math.hypot(mouse.x - ux, mouse.y - uy) < 20) {
+      const d = Math.hypot(mouse.x - ux, mouse.y - uy);
+      if (d < 36 && d < bestDist) {
+        bestDist = d;
         clickedUnit = u;
-        break;
+      }
+    }
+    // Fallback to world-space pick if nothing hit (camera misalign edge cases)
+    if (!clickedUnit) {
+      const wx = camera.x + mouse.x - canvas.width/2;
+      const wy = camera.y + mouse.y - canvas.height/2;
+      for (const u of myUnits) {
+        const d = Math.hypot(u.x - wx, u.y - wy);
+        if (d < 32 && d < bestDist) {
+          bestDist = d;
+          clickedUnit = u;
+        }
       }
     }
 
@@ -411,19 +488,18 @@ socket.emit("place_map_object", { type, kind, x: wx, y: wy, meta });
       clickedUnit.selected = true;
 
         updateSelectedUnits(); // <-- sync panel
-      selecting = false;
+      selecting = window.selecting = false;
       return;
     }
 
     // ===== Clicked empty space =====
     buildings.forEach(b => b.selected = false);
-    buildingPanel.style.display = "none";
     myUnits.forEach(u => u.selected = false);
     updateSelectedUnits(); // <-- sync panel
-    // Start selection box
-    selecting = true;
+    // Start selection box only if dragging begins from empty space
     selectStart.x = mouse.x;
     selectStart.y = mouse.y;
+    selecting = window.selecting = true;
   }
 });
 
@@ -629,18 +705,23 @@ function onGlobalDragEnd(e) {
 
 canvas.addEventListener("mouseup", e=>{
   if(e.button===0){
-    selecting=false;
-
-    const x1=Math.min(selectStart.x,mouse.x);
-    const y1=Math.min(selectStart.y,mouse.y);
-    const x2=Math.max(selectStart.x,mouse.x);
-    const y2=Math.max(selectStart.y,mouse.y);
-    for(const u of myUnits){
-      const sx=canvas.width/2+u.x-camera.x;
-      const sy=canvas.height/2+u.y-camera.y;
-      u.selected=(sx>=x1&&sx<=x2 && sy>=y1&&sy<=y2);
+    if (selecting) {
+      const dx = mouse.x - selectStart.x;
+      const dy = mouse.y - selectStart.y;
+      if ((dx * dx + dy * dy) >= MIN_DRAG_DIST_SQ) {
+        const x1 = Math.min(selectStart.x, mouse.x);
+        const y1 = Math.min(selectStart.y, mouse.y);
+        const x2 = Math.max(selectStart.x, mouse.x);
+        const y2 = Math.max(selectStart.y, mouse.y);
+        for (const u of myUnits) {
+          const sx = canvas.width / 2 + u.x - camera.x;
+          const sy = canvas.height / 2 + u.y - camera.y;
+          u.selected = (sx >= x1 && sx <= x2 && sy >= y1 && sy <= y2);
+        }
+        updateSelectedUnits(); // <-- sync panel
+      }
     }
-    updateSelectedUnits(); // <-- sync panel
+    selecting = window.selecting = false;
   } 
 
       if(e.button === 2){ // right click
@@ -668,7 +749,20 @@ canvas.addEventListener("mouseup", e=>{
             }
         }
 
+        // If no selection yet, allow right-click to select a friendly unit under cursor
+        const hadSelection = myUnits.some(u => u.selected);
+        if (!hadSelection) {
+          const clickedSelfUnit = myUnits.find(u => Math.hypot(u.x - wx, u.y - wy) < 20);
+          if (clickedSelfUnit) {
+            myUnits.forEach(u => u.selected = false);
+            clickedSelfUnit.selected = true;
+            updateSelectedUnits();
+            return;
+          }
+        }
+
         const selectedUnits = myUnits.filter(u => u.selected);
+        const moveMarkers = [];
 
         // Helper: find a map entity at world coords (point-in-rect using meta collision or size)
         function findEntityAt(wx, wy) {
@@ -707,19 +801,16 @@ canvas.addEventListener("mouseup", e=>{
 
           // If clicking an enemy entity, set unit to attack that entity instead of moving to its center
           if (clickedEntity && clickedEntity.owner !== mySid) {
-            // compute an attack approach point on the entity perimeter so collision doesn't block engagement
+            // spread attackers around the entity so they do not stack
             const cw = (clickedEntity.meta && clickedEntity.meta.cw) ? clickedEntity.meta.cw : (clickedEntity.meta && clickedEntity.meta.w ? clickedEntity.meta.w : BUILD_W);
             const ch = (clickedEntity.meta && clickedEntity.meta.ch) ? clickedEntity.meta.ch : (clickedEntity.meta && clickedEntity.meta.h ? clickedEntity.meta.h : BUILD_H);
             const entRadius = Math.max(cw, ch) / 2;
-            const dxToEnt = clickedEntity.x - u.x;
-            const dyToEnt = clickedEntity.y - u.y;
-            const distToEnt = Math.hypot(dxToEnt, dyToEnt) || 1;
-            const nx = dxToEnt / distToEnt;
-            const ny = dyToEnt / distToEnt;
-            // desired distance from center so effective distance <= UNIT_ATTACK_RANGE
-            const desiredDist = entRadius + UNIT_ATTACK_RANGE - 4; // small buffer
-            const attackX = clickedEntity.x - nx * desiredDist;
-            const attackY = clickedEntity.y - ny * desiredDist;
+
+            // place each unit on a ring around the target based on formation index
+            const angle = (idx / Math.max(1, selectedUnits.length)) * Math.PI * 2;
+            const ringRadius = entRadius + UNIT_ATTACK_RANGE - 6; // small buffer so they sit just inside range
+            const attackX = clickedEntity.x + Math.cos(angle) * ringRadius;
+            const attackY = clickedEntity.y + Math.sin(angle) * ringRadius;
 
             u.targetEnemy = {
               kind: 'entity',
@@ -742,8 +833,16 @@ canvas.addEventListener("mouseup", e=>{
             u.tx = wx;
             u.ty = wy;
             u.manualMove = true;
+
+            // record a per-unit marker with formation offset for visual feedback
+            const offset = getUnitTargetOffsetClient(idx, selectedUnits.length);
+            moveMarkers.push({ x: wx + offset.dx, y: wy + offset.dy, ts: performance.now() });
           }
         });
+
+        try {
+          window.moveMarkers = moveMarkers;
+        } catch (e) {}
 
         
     }
@@ -925,14 +1024,12 @@ document.addEventListener('click', (ev) => {
   const t = ev.target;
   if (!t) return;
   if (t.id === 'buildBtn' || (t.closest && t.closest('#buildBtn'))) {
-    if (!localBuildingPlaced) buildMode = true;
+    buildMode = true;
     try { console.log('BUILD: buildMode ON'); } catch(e){}
   }
   if (t.id === 'mineBtn' || (t.closest && t.closest('#mineBtn'))) {
-    if (!localMinePlaced) {
-      mineMode = true;
-      try { console.log('MINE: mineMode ON'); } catch(e){}
-    }
+    mineMode = true;
+    try { console.log('MINE: mineMode ON'); } catch(e){}
   }
   if (t.id === 'blacksmithBtn' || (t.closest && t.closest('#blacksmithBtn'))) {
     if (!localBlacksmithPlaced) {
@@ -948,7 +1045,20 @@ const editorBtn = document.getElementById("editorBtn");
 editorBtn.onclick = () => {
   editorMode = !editorMode;
   editorBtn.textContent = editorMode ? "Editor: ON" : "Editor: OFF";
+  const ec = document.getElementById("editorControls");
+  if (ec) ec.style.display = editorMode ? "block" : "none";
+  const bs = document.getElementById("brushSelect");
+  if (bs) bs.disabled = !editorMode;
 };
+
+// Initialize editor controls visibility on load
+(() => {
+  const ec = document.getElementById("editorControls");
+  if (ec) ec.style.display = editorMode ? "block" : "none";
+  const bs = document.getElementById("brushSelect");
+  if (bs) bs.disabled = !editorMode;
+  if (bs) bs.addEventListener('change', resetCollisionOffset);
+})();
 
 const entityBtn = document.getElementById("entityBtn");
 if (entityBtn) {

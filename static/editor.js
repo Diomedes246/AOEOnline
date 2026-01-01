@@ -74,36 +74,66 @@ async function loadTilesFromServer() {
     const data = await res.json();
 
     const tileNames = Array.isArray(data.tiles) ? data.tiles : [];
+    if (!tileNames.includes("campfire")) tileNames.push("campfire");
 
     TILE_DEFS = {};
     tileImages = {};
 
 for (const name of tileNames) {
-  const img = new Image();
-  img.src = `static/tiles/${name}.png`;
-
-  // set temporary defaults (will be replaced on load)
-  TILE_DEFS[name] = { src: img.src, w: DEFAULT_TILE_W, h: DEFAULT_TILE_H };
-  tileImages[name] = img;
-
-  const applySize = () => {
-    if (img.naturalWidth > 0 && img.naturalHeight > 0) {
-      TILE_DEFS[name].w = img.naturalWidth;
-      TILE_DEFS[name].h = img.naturalHeight;
-
-      // If this tile is currently selected, snap editor size to real file size
-      const bs = document.getElementById("brushSelect");
-if (bs && bs.value === `tile:${name}` && !editorTileOverride) {
-  editorTileW = TILE_DEFS[name].w;
-  editorTileH = TILE_DEFS[name].h;
-  editorTileAspect = editorTileH / editorTileW;
-}
+  if (name === "campfire") {
+    const frames = [];
+    for (let i = 1; i <= 7; i++) {
+      const f = new Image();
+      f.src = `static/campfire/campfire${i}.png`;
+      frames.push(f);
     }
-  };
 
-  // Works for both cached + freshly loaded images
-  if (img.complete) applySize();
-  else img.onload = applySize;
+    TILE_DEFS[name] = { src: frames[0].src, w: DEFAULT_TILE_W, h: DEFAULT_TILE_H, frames, animSpeed: 8 };
+    tileImages[name] = frames[0];
+
+    const applySize = (img) => {
+      if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+        TILE_DEFS[name].w = img.naturalWidth;
+        TILE_DEFS[name].h = img.naturalHeight;
+        const bs = document.getElementById("brushSelect");
+        if (bs && bs.value === `tile:${name}` && !editorTileOverride) {
+          editorTileW = TILE_DEFS[name].w;
+          editorTileH = TILE_DEFS[name].h;
+          editorTileAspect = editorTileH / editorTileW;
+        }
+      }
+    };
+    frames.forEach((img) => {
+      if (img.complete) applySize(img);
+      else img.onload = () => applySize(img);
+    });
+  } else {
+    const img = new Image();
+    img.src = `static/tiles/${name}.png`;
+
+    // set temporary defaults (will be replaced on load)
+    TILE_DEFS[name] = { src: img.src, w: DEFAULT_TILE_W, h: DEFAULT_TILE_H };
+    tileImages[name] = img;
+
+    const applySize = () => {
+      if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+        TILE_DEFS[name].w = img.naturalWidth;
+        TILE_DEFS[name].h = img.naturalHeight;
+
+        // If this tile is currently selected, snap editor size to real file size
+        const bs = document.getElementById("brushSelect");
+        if (bs && bs.value === `tile:${name}` && !editorTileOverride) {
+          editorTileW = TILE_DEFS[name].w;
+          editorTileH = TILE_DEFS[name].h;
+          editorTileAspect = editorTileH / editorTileW;
+        }
+      }
+    };
+
+    // Works for both cached + freshly loaded images
+    if (img.complete) applySize();
+    else img.onload = applySize;
+  }
 }
 
     // If there's no explicit 'town_center' tile but we have a 'building' tile,
