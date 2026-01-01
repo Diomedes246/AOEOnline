@@ -5,6 +5,8 @@ if (typeof window.selecting === "undefined") window.selecting = false;
 var selectStart = window.selectStart;
 var selecting = window.selecting;
 
+const QUEST_MARKER_OFFSET = 6; // pixels above the sprite's head
+
 function drawCircleDebug(x, y, r, color) {
   ctx.strokeStyle = color;
   ctx.lineWidth = 1;
@@ -42,6 +44,36 @@ function drawEntityTitle(obj, sx, sy) {
     ctx.fillStyle = ownerColor;
     ctx.fillText(`owner: ${owner}`, sx, sy - 22);
   }
+  
+  // Draw quest marker if entity gives a quest
+  if (obj.meta && obj.meta.givesQuest) {
+    drawQuestMarker(sx, sy - 56); // Just above the title (title is at sy - 36)
+  }
+}
+
+function drawQuestMarker(sx, sy) {
+  // Draw a bright exclamation mark in a star or highlight
+  const size = 16;
+  
+  // Yellow/gold background circle
+  ctx.fillStyle = '#FFD700';
+  ctx.beginPath();
+  ctx.arc(sx, sy, size/2 + 2, 0, Math.PI * 2);
+  ctx.fill();
+  
+  // White border
+  ctx.strokeStyle = '#FFF';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(sx, sy, size/2 + 2, 0, Math.PI * 2);
+  ctx.stroke();
+  
+  // Exclamation mark text
+  ctx.fillStyle = '#000';
+  ctx.font = 'bold 14px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('!', sx, sy);
 }
 
 function renderYForWorld(obj) {
@@ -134,6 +166,12 @@ function draw() {
   // Draw background
   drawBackground();
 
+  // Persistent NPC animation state (keyed by NPC ID)
+  if (typeof window.npcAnimState === 'undefined') {
+    window.npcAnimState = {};
+  }
+  const npcAnimState = window.npcAnimState;
+
   const worldRenderables = [];
 
   // Trees
@@ -147,10 +185,18 @@ function draw() {
 
   // Editor map objects
   for (const o of mapObjects) {
-    worldRenderables.push({
-      _type: o.type === "building" ? "building" : "tile",
-      ...o
-    });
+    // NPCs and spiders get their own type for special rendering
+    if (o.kind === 'npc' || o.kind === 'spider') {
+      worldRenderables.push({
+        _type: "npc",
+        ...o
+      });
+    } else {
+      worldRenderables.push({
+        _type: o.type === "building" ? "building" : "tile",
+        ...o
+      });
+    }
   }
 
   // RTS buildings array
@@ -199,6 +245,56 @@ function draw() {
     }
 
     if (obj._type === "tile") {
+    // Skip canvas rendering for billboards (they're CSS-only)
+    if (obj.kind === 'billboard') {
+      // Billboards show title/owner within the CSS element, not as canvas text
+      if (obj.meta?.entity) {
+        const hp = obj.hp ?? obj.meta.hp ?? null;
+        if (hp !== null) {
+          const def = TILE_DEFS[obj.kind] || { w: obj.meta?.w ?? 256, h: obj.meta?.h ?? 256 };
+          const wbar = obj.meta?.w ?? def.w;
+          const hbar = 8;
+          const bx = sx - Math.min(120, wbar) / 2;
+          const by = sy - (obj.meta?.h ?? def.h) / 2 - 30;
+          const maxHp = obj.maxHp ?? obj.meta?.maxHp ?? 200;
+          ctx.fillStyle = 'rgba(0,0,0,0.6)';
+          ctx.fillRect(bx, by, Math.min(120, wbar), hbar);
+          const pct = Math.max(0, Math.min(1, (hp / maxHp)));
+          ctx.fillStyle = 'red';
+          ctx.fillRect(bx, by, Math.min(120, wbar) * pct, hbar);
+          ctx.strokeStyle = 'white';
+          ctx.lineWidth = 1;
+          ctx.strokeRect(bx, by, Math.min(120, wbar), hbar);
+        }
+      }
+      // Editor mode selection highlight
+      if (editorMode && window.selectedEditorEntity && obj.id === window.selectedEditorEntity.id) {
+        const w = obj.meta?.w ?? 300;
+        const h = obj.meta?.h ?? 200;
+        ctx.strokeStyle = "lime";
+        ctx.lineWidth = 3;
+        ctx.setLineDash([8, 4]);
+        ctx.strokeRect(sx - w / 2 - 5, sy - h / 2 - 5, w + 10, h + 10);
+        ctx.setLineDash([]);
+      }
+      // Collision debug for billboards
+      if (DEBUG_COLLISIONS && obj.meta?.collides) {
+        const cx = sx + (obj.meta.cx || 0);
+        const cy = sy + (obj.meta.cy || 0);
+        ctx.strokeStyle = "rgba(0,255,255,0.4)";
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 4]);
+        ctx.strokeRect(
+          cx - (obj.meta.cw ?? 0) / 2,
+          cy - (obj.meta.ch ?? 0) / 2,
+          (obj.meta.cw ?? 0),
+          (obj.meta.ch ?? 0)
+        );
+        ctx.setLineDash([]);
+      }
+      continue;
+    }
+    
     const def = TILE_DEFS[obj.kind] || { w: obj.meta?.w ?? 256, h: obj.meta?.h ?? 256, _placeholder: true };
 
     const w = obj.meta?.w ?? def.w ?? 256;
@@ -293,6 +389,14 @@ function draw() {
         ctx.strokeRect(bx, by, Math.min(120, wbar), hbar);
       }
     }
+    // Editor mode: highlight selected entity for movement
+    if (editorMode && window.selectedEditorEntity && obj.id === window.selectedEditorEntity.id) {
+      ctx.strokeStyle = "lime";
+      ctx.lineWidth = 3;
+      ctx.setLineDash([8, 4]);
+      ctx.strokeRect(sx - w / 2 - 5, sy - h / 2 - 5, w + 10, h + 10);
+      ctx.setLineDash([]);
+    }
     continue;
   }
 
@@ -332,6 +436,113 @@ function draw() {
         ctx.strokeRect(bx, by, barW, barH);
       }
     }
+    // Editor mode: highlight selected entity for movement
+    if (editorMode && window.selectedEditorEntity && obj.id === window.selectedEditorEntity.id) {
+      ctx.strokeStyle = "lime";
+      ctx.lineWidth = 3;
+      ctx.setLineDash([8, 4]);
+      ctx.strokeRect(sx - BUILD_W/2 - 5, sy - BUILD_H/2 - 5, BUILD_W + 10, BUILD_H + 10);
+      ctx.setLineDash([]);
+    }
+    continue;
+  }
+
+  if (obj._type === "npc") {
+    // Render NPC (same logic as units but from worldRenderables for z-order)
+    const u = obj;
+    const animState = npcAnimState[u.id] || { renderFrame: 0, renderAttackFrame: 0 };
+    
+    const anim = u.meta?.anim || 'idle';
+    const dir = u.meta?.dir || '000';
+    
+    // Determine sprite set based on NPC kind
+    const isSpider = (u.kind === 'spider');
+    const spriteSet = isSpider ? spiderSprites : npcSprites;
+    const walkFrameCount = isSpider ? SPIDER_WALK_FRAMES : NPC_WALK_FRAMES;
+    
+    let frames, framesShadow, frameIndex;
+    
+    if (isSpider) {
+      // Spiders only have walk animation (no idle or shadow)
+      frames = spriteSet.walk[dir];
+      framesShadow = null;
+      animState.renderFrame = (animState.renderFrame ?? 0) + ANIM_SPEED;
+      if (animState.renderFrame >= walkFrameCount) animState.renderFrame = 0;
+      frameIndex = Math.floor(animState.renderFrame);
+    } else if (anim === "attack") {
+      frames = npcSprites.attack?.[dir] || npcSprites.attack[dir];
+      framesShadow = npcSprites.attackshadow?.[dir] || npcSprites.attackshadow[dir];
+      animState.renderAttackFrame = (animState.renderAttackFrame ?? 0) + ANIM_SPEED;
+      if (animState.renderAttackFrame >= ATTACK_ANIM_FRAMES) animState.renderAttackFrame = 0;
+      frameIndex = Math.floor(animState.renderAttackFrame);
+    } else if (anim === "walk") {
+      frames = npcSprites.walk[dir];
+      framesShadow = npcSprites.walkshadow[dir];
+      animState.renderFrame = (animState.renderFrame ?? 0) + ANIM_SPEED;
+      if (animState.renderFrame >= NPC_WALK_FRAMES) animState.renderFrame = 0;
+      frameIndex = Math.floor(animState.renderFrame);
+    } else {
+      frames = npcSprites.idle[dir];
+      framesShadow = npcSprites.idleshadow[dir];
+      animState.renderFrame = (animState.renderFrame ?? 0) + ANIM_SPEED;
+      if (animState.renderFrame >= IDLE_FRAMES) animState.renderFrame = 0;
+      frameIndex = Math.floor(animState.renderFrame);
+    }
+    
+    const shadowImg = framesShadow?.[frameIndex];
+    const bodyImg = frames?.[frameIndex];
+    
+    // Spiders use smaller sprite size (100px instead of 256px)
+    const spriteW = isSpider ? 100 : SPRITE_W;
+    const spriteH = isSpider ? 100 : SPRITE_H;
+    
+    if (shadowImg && shadowImg.complete) {
+      ctx.drawImage(shadowImg, sx - spriteW/2, sy - spriteH/2, spriteW, spriteH);
+    }
+    if (bodyImg && bodyImg.complete) {
+      ctx.drawImage(bodyImg, sx - spriteW/2, sy - spriteH/2, spriteW, spriteH);
+    }
+    
+    // Draw health bar for spiders
+    if (isSpider) {
+      const hp = u.hp ?? 50;
+      const maxHp = u.maxHp || 50;
+      const barW = 60;
+      const barH = 6;
+      const bx = sx - barW/2;
+      const by = sy - 50 - 15; // Use 50 as half of spider sprite height (100px)
+      
+      ctx.fillStyle = 'rgba(0,0,0,0.7)';
+      ctx.fillRect(bx, by, barW, barH);
+      const pct = Math.max(0, Math.min(1, hp / maxHp));
+      ctx.fillStyle = '#d32f2f';
+      ctx.fillRect(bx, by, barW * pct, barH);
+      ctx.strokeStyle = 'white';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(bx, by, barW, barH);
+    }
+    
+    // Draw title/name for NPCs (not spiders)
+    if (!isSpider) {
+      drawEntityTitle(u, sx, sy);
+    }
+    
+    // Draw quest marker for spiders that give quests
+    if (isSpider && u.meta && u.meta.givesQuest) {
+      drawQuestMarker(sx, sy - 50); // Just above where name text appears
+    }
+    
+    // Editor mode selection highlight
+    if (editorMode && window.selectedEditorEntity && u.id === window.selectedEditorEntity.id) {
+      ctx.strokeStyle = "lime";
+      ctx.lineWidth = 3;
+      ctx.setLineDash([8, 4]);
+      const spriteW = isSpider ? 100 : SPRITE_W;
+      const spriteH = isSpider ? 100 : SPRITE_H;
+      ctx.strokeRect(sx - spriteW/2 - 5, sy - spriteH/2 - 5, spriteW + 10, spriteH + 10);
+      ctx.setLineDash([]);
+    }
+    
     continue;
   }
 }
@@ -416,37 +627,75 @@ for (const sid in players) {
   }
 }
 
-unitRenderables.sort((a,b) => renderYForUnit(a.ref) - renderYForUnit(b.ref));
+// NPCs are now added to worldRenderables to respect z-order
+// Ensure their animation state exists
+for (const obj of mapObjects) {
+  if (obj.kind === 'npc' || obj.kind === 'spider') {
+    if (!npcAnimState[obj.id]) {
+      npcAnimState[obj.id] = { renderFrame: 0, renderAttackFrame: 0 };
+    }
+  }
+}
+
+// Sort units by z-order first, then Y coordinate
+unitRenderables.sort((a,b) => {
+  const refA = a.ref;
+  const refB = b.ref;
+  
+  // Check z-order first
+  const za = (refA.meta && typeof refA.meta.z === "number") ? refA.meta.z : (typeof refA.z === "number" ? refA.z : 0);
+  const zb = (refB.meta && typeof refB.meta.z === "number") ? refB.meta.z : (typeof refB.z === "number" ? refB.z : 0);
+  if (za !== zb) return za - zb; // higher z draws later
+  
+  // Then sort by Y coordinate
+  return renderYForUnit(refA) - renderYForUnit(refB);
+});
 
 for (const item of unitRenderables) {
   const u = item.ref;
   const isMine = (item.owner === mySid);
   const ownerName = item.owner;
+  const isNPC = item.isNPC;
 
   const sx = canvas.width/2 + u.x - camera.x;
   const sy = canvas.height/2 + u.y - camera.y;
 
   let frames, framesShadow, frameIndex;
 
-  if (!isMine) {
-    if (u.anim === "attack") {
-      frames = playerSprites.attack[u.dir];
-      framesShadow = playerSprites.attackshadow[u.dir];
-      u.renderAttackFrame = (u.renderAttackFrame ?? 0) + ANIM_SPEED;
-      if (u.renderAttackFrame >= ATTACK_ANIM_FRAMES) u.renderAttackFrame = 0;
-      frameIndex = Math.floor(u.renderAttackFrame);
-    } else if (u.anim === "walk") {
-      frames = playerSprites.walk[u.dir];
-      framesShadow = playerSprites.walkshadow[u.dir];
-      u.renderFrame = (u.renderFrame ?? 0) + ANIM_SPEED;
-      if (u.renderFrame >= WALK_FRAMES) u.renderFrame = 0;
-      frameIndex = Math.floor(u.renderFrame);
+  // NPCs use meta.anim and meta.dir
+  const anim = isNPC ? (u.meta?.anim || 'idle') : u.anim;
+  const dir = isNPC ? (u.meta?.dir || '000') : u.dir;
+
+  // Choose sprite set (npcSprites for NPCs, playerSprites for players)
+  const spriteSet = isNPC ? npcSprites : playerSprites;
+
+  // Get animation state (use persistent store for NPCs)
+  let animState = isNPC ? npcAnimState[u.id] : u;
+  if (!animState) {
+    animState = { renderFrame: 0, renderAttackFrame: 0 };
+    if (isNPC) npcAnimState[u.id] = animState;
+  }
+
+  if (!isMine || isNPC) {
+    if (anim === "attack") {
+      frames = spriteSet.attack?.[dir] || playerSprites.attack[dir];
+      framesShadow = spriteSet.attackshadow?.[dir] || playerSprites.attackshadow[dir];
+      animState.renderAttackFrame = (animState.renderAttackFrame ?? 0) + ANIM_SPEED;
+      if (animState.renderAttackFrame >= ATTACK_ANIM_FRAMES) animState.renderAttackFrame = 0;
+      frameIndex = Math.floor(animState.renderAttackFrame);
+    } else if (anim === "walk") {
+      frames = spriteSet.walk[dir];
+      framesShadow = spriteSet.walkshadow[dir];
+      animState.renderFrame = (animState.renderFrame ?? 0) + ANIM_SPEED;
+      const walkFrameCount = isNPC ? NPC_WALK_FRAMES : WALK_FRAMES;
+      if (animState.renderFrame >= walkFrameCount) animState.renderFrame = 0;
+      frameIndex = Math.floor(animState.renderFrame);
     } else {
-      frames = playerSprites.idle[u.dir];
-      framesShadow = playerSprites.idleshadow[u.dir];
-      u.renderFrame = (u.renderFrame ?? 0) + ANIM_SPEED;
-      if (u.renderFrame >= IDLE_FRAMES) u.renderFrame = 0;
-      frameIndex = Math.floor(u.renderFrame);
+      frames = spriteSet.idle[dir];
+      framesShadow = spriteSet.idleshadow[dir];
+      animState.renderFrame = (animState.renderFrame ?? 0) + ANIM_SPEED;
+      if (animState.renderFrame >= IDLE_FRAMES) animState.renderFrame = 0;
+      frameIndex = Math.floor(animState.renderFrame);
     }
   } else {
     if (u.anim === "attack") {
@@ -470,6 +719,14 @@ for (const item of unitRenderables) {
   if (sh && sh.complete) ctx.drawImage(sh, sx - SPRITE_W/2, sy - SPRITE_H/2, SPRITE_W, SPRITE_H);
   if (img && img.complete) ctx.drawImage(img, sx - SPRITE_W/2, sy - SPRITE_H/2, SPRITE_W, SPRITE_H);
 
+  // NPCs show title instead of HP bar
+  if (isNPC) {
+    const title = u.meta?.title || 'NPC';
+    ctx.fillStyle = "cyan";
+    ctx.font = "12px monospace";
+    ctx.textAlign = "center";
+    ctx.fillText(title, sx, sy - 40);
+  } else {
   // HP bar
   const computedStats = (typeof getUnitStats === "function") ? getUnitStats(u) : null;
   const maxHp = u.maxHp || computedStats?.maxHp || UNIT_MAX_HEALTH || 100;
@@ -479,6 +736,7 @@ for (const item of unitRenderables) {
   ctx.fillRect(sx - 20, sy - 30, 40, 5);
   ctx.fillStyle = "green";
   ctx.fillRect(sx - 20, sy - 30, 40 * hpRatio, 5);
+  }
 
   // Collision debug for units
   if (DEBUG_COLLISIONS) {
@@ -487,17 +745,10 @@ for (const item of unitRenderables) {
 
   // Selection highlight
   if (u.selected) {
-    ctx.strokeStyle = "cyan";
-    ctx.lineWidth = 2.5;
+    ctx.strokeStyle = "yellow";
+    ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.arc(sx, sy, 28, 0, Math.PI * 2);
-    ctx.stroke();
-    
-    // Inner glow circle
-    ctx.strokeStyle = "rgba(0,255,255,0.4)";
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.arc(sx, sy, 32, 0, Math.PI * 2);
+    ctx.arc(sx, sy, 20, 0, Math.PI * 2);
     ctx.stroke();
   }
 
@@ -519,6 +770,47 @@ for (const item of unitRenderables) {
 
   // Collision debug overlays for world objects
   if (DEBUG_COLLISIONS) {
+    // NPC and Spider paths
+    for (const obj of mapObjects) {
+      if ((obj.kind === 'npc' || obj.kind === 'spider') && obj.meta?.waypoints) {
+        const waypoints = obj.meta.waypoints;
+        if (waypoints.length < 2) continue;
+        
+        ctx.strokeStyle = "rgba(255, 165, 0, 0.8)";
+        ctx.lineWidth = 2;
+        ctx.setLineDash([5, 5]);
+        ctx.beginPath();
+        
+        for (let i = 0; i < waypoints.length; i++) {
+          const wp = waypoints[i];
+          const sx = canvas.width/2 + wp.x - camera.x;
+          const sy = canvas.height/2 + wp.y - camera.y;
+          
+          if (i === 0) {
+            ctx.moveTo(sx, sy);
+          } else {
+            ctx.lineTo(sx, sy);
+          }
+          
+          // Draw waypoint markers
+          ctx.fillStyle = "rgba(255, 165, 0, 0.6)";
+          ctx.fillRect(sx - 4, sy - 4, 8, 8);
+          ctx.fillStyle = "white";
+          ctx.font = "10px monospace";
+          ctx.fillText(i.toString(), sx - 3, sy + 3);
+        }
+        
+        // Close the loop
+        const firstWP = waypoints[0];
+        const lastSX = canvas.width/2 + firstWP.x - camera.x;
+        const lastSY = canvas.height/2 + firstWP.y - camera.y;
+        ctx.lineTo(lastSX, lastSY);
+        
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    }
+    
     // Trees (circle at collision center)
     for (const t of trees) {
       const tx = canvas.width/2 + t.x - camera.x;
@@ -829,12 +1121,20 @@ for (const item of unitRenderables) {
   const popCap = townCentersOwned * (typeof POP_LIMIT === 'number' ? POP_LIMIT : 10);
 
   const rc = window.resourceCounts || { red:0, green:0, blue:0 };
+  const editorEntityInfo = (editorMode && window.selectedEditorEntity) 
+    ? `<br/><span style="color:lime">Selected Entity: ${window.selectedEditorEntity.kind || 'entity'} (Arrow keys to move, Shift+Arrow for collision)</span>` 
+    : '';
   hud.innerHTML = `Camera: ${camera.x|0}, ${camera.y|0}<br/>
   <span style="color:#d32f2f">■</span> ${rc.red || 0} <span style="color:#4CAF50">■</span> ${rc.green || 0} <span style="color:#2196F3">■</span> ${rc.blue || 0}<br/>
   Selected: ${selectedUnitsLocal.length}<br/>
-  Population: ${popCount} / ${popCap}`;
+  Population: ${popCount} / ${popCap}${editorEntityInfo}`;
 
   updateEditorStatsPanel();
+
+  // Update billboards (CSS-based rendering)
+  if (typeof updateBillboards === 'function') {
+    updateBillboards();
+  }
 
   requestAnimationFrame(draw);
 }

@@ -132,7 +132,7 @@ function resolveCircleRect(unit, radius, rect) {
 
   if (dist === 0 || dist >= radius) return null;
 
-  const overlap = radius - dist;
+  const overlap = radius - dist + 1; // Add 1px buffer to prevent edge-case jitter
   const nx = dist === 0 ? 1 : dx / dist;
   const ny = dist === 0 ? 0 : dy / dist;
 
@@ -150,7 +150,7 @@ function resolveCircleCircle(unit, radius, cx, cy, cr) {
 
   if (dist === 0 || dist >= minDist) return null;
 
-  const overlap = minDist - dist;
+  const overlap = minDist - dist + 0.5; // Add 0.5px buffer to prevent edge-case jitter
   const nx = dist === 0 ? 1 : dx / dist;
   const ny = dist === 0 ? 0 : dy / dist;
 
@@ -182,7 +182,7 @@ function resolveCircleBuilding(unit, radius, b) {
 
   if (dist === 0 || dist >= radius) return null;
 
-  const overlap = radius - dist;
+  const overlap = radius - dist + 1; // Add 1px buffer to prevent edge-case jitter
   const nx = dist === 0 ? 1 : dx / dist;
   const ny = dist === 0 ? 0 : dy / dist;
 
@@ -323,6 +323,28 @@ function applyCollisions(u, nowTs) {
     }
   }
 
+  // Track stuck state
+  const moveSpeed = Math.hypot(mvx, mvy);
+  if (moveSpeed < 0.5) {
+    u._stuckCounter = (u._stuckCounter || 0) + 1;
+  } else {
+    u._stuckCounter = 0;
+  }
+
+  // Emergency unstick: if stuck for too long, teleport away from obstacle
+  if (u._stuckCounter > 30 && firstHit) {
+    const awayX = u.x - (firstHit.cx || u.x);
+    const awayY = u.y - (firstHit.cy || u.y);
+    const awayLen = Math.hypot(awayX, awayY);
+    if (awayLen > 0.1) {
+      u.x += (awayX / awayLen) * 20;
+      u.y += (awayY / awayLen) * 20;
+      u._stuckCounter = 0;
+      u._detour = null;
+      return;
+    }
+  }
+
   if (firstHit) {
     // revert to previous position and set a detour around the obstacle center
     u.x = prevX;
@@ -330,9 +352,13 @@ function applyCollisions(u, nowTs) {
 
     // Nudge slightly outward along collision normal so we don't remain embedded
     if (typeof firstHit.nx === 'number' && typeof firstHit.ny === 'number') {
-      u.x += firstHit.nx * 2;
-      u.y += firstHit.ny * 2;
+      u.x += firstHit.nx * 3; // Increased from 2 to 3 for more separation
+      u.y += firstHit.ny * 3;
     }
+
+    // Stop movement for this frame to prevent jitter
+    u.lastX = u.x;
+    u.lastY = u.y;
 
     const toCenterX = (firstHit.cx ?? u.x) - prevX;
     const toCenterY = (firstHit.cy ?? u.y) - prevY;
@@ -445,7 +471,25 @@ function update(){
             const dx = u._detour.x - u.x;
             const dy = u._detour.y - u.y;
             const dist = Math.hypot(dx, dy);
-            if (dist > 1.5) {
+            // Clear detour if we've reached it or if we have a new target that's clear
+            if (dist < 3) {
+              delete u._detour;
+            } else if (u.tx && u.ty) {
+              // Check if we can go straight to target now
+              const toTargetX = u.tx - u.x;
+              const toTargetY = u.ty - u.y;
+              const targetDist = Math.hypot(toTargetX, toTargetY);
+              const targetDir = Math.sqrt(toTargetX * toTargetX + toTargetY * toTargetY);
+              if (targetDist > 10 && targetDir > 0) {
+                const probeX = u.x + (toTargetX / targetDir) * 10;
+                const probeY = u.y + (toTargetY / targetDir) * 10;
+                if (!collidesAt(u, probeX, probeY, PLAYER_RADIUS)) {
+                  delete u._detour;
+                }
+              }
+            }
+            
+            if (u._detour && dist > 1.5) {
               const speed = 4.5 * dtScale;
               u.x += (dx / dist) * Math.min(speed, dist);
               u.y += (dy / dist) * Math.min(speed, dist);
@@ -456,8 +500,6 @@ function update(){
               u.lastX = u.x;
               u.lastY = u.y;
               continue;
-            } else {
-              delete u._detour;
             }
           }
         }
@@ -566,6 +608,7 @@ if (!u.manualMove) {
 
   // validate current targetEnemy by unitId
   if (u.targetEnemy) {
+    console.log('[COMBAT] Unit has targetEnemy:', u.targetEnemy.kind, u.targetEnemy.entityId || u.targetEnemy.unitId);
     if (u.targetEnemy.kind === 'unit') {
       const enemyPlayer = players[u.targetEnemy.sid];
       if (!enemyPlayer || !enemyPlayer.units || enemyPlayer.units.length === 0) {
@@ -584,7 +627,12 @@ if (!u.manualMove) {
       }
     } else if (u.targetEnemy.kind === 'entity') {
       const ent = (mapObjects || []).find(m => m.id === u.targetEnemy.entityId);
+      if (ent) {
+        console.log('[VALIDATION] Spider found:', ent.kind, 'Full object:', JSON.stringify({id: ent.id, hp: ent.hp, maxHp: ent.maxHp, owner: ent.owner, kind: ent.kind}));
+      }
+      console.log('[VALIDATION] Entity found:', !!ent, 'hp:', ent?.hp);
       if (!ent || (ent.hp ?? 0) <= 0) {
+        console.log('[VALIDATION] Clearing targetEnemy - entity not found or dead');
         u.targetEnemy = null;
       } else {
         const dx = ent.x - u.x;
@@ -596,7 +644,11 @@ if (!u.manualMove) {
         const ch = (ent.meta && ent.meta.ch) ? ent.meta.ch : (ent.meta && ent.meta.h ? ent.meta.h : BUILD_H);
         const entRadius = Math.max(cw, ch) / 2;
         const effectiveDist = Math.max(0, dist - entRadius);
-        if (effectiveDist > AGGRO_LOSE_RADIUS && !u.targetEnemy.userIssued) u.targetEnemy = null;
+        console.log('[VALIDATION] effectiveDist:', effectiveDist, 'AGGRO_LOSE_RADIUS:', AGGRO_LOSE_RADIUS, 'userIssued:', u.targetEnemy.userIssued);
+        if (effectiveDist > AGGRO_LOSE_RADIUS && !u.targetEnemy.userIssued) {
+          console.log('[VALIDATION] Clearing targetEnemy - too far and not user issued');
+          u.targetEnemy = null;
+        }
       }
     }
   }
@@ -609,6 +661,8 @@ if (!u.manualMove) {
       if (dist <= AGGRO_RADIUS) u.targetEnemy = nearest;
     }
   }
+
+  console.log('[COMBAT] After acquire, targetEnemy exists:', !!u.targetEnemy, u.targetEnemy?.kind);
 
   // engage target
     if (u.targetEnemy) {
@@ -651,8 +705,13 @@ if (!u.manualMove) {
           }
         }
       } else if (u.targetEnemy.kind === 'entity') {
+        console.log('[ENTITY_ATTACK] Starting entity attack, entityId:', u.targetEnemy.entityId);
         const ent = (mapObjects || []).find(m => m.id === u.targetEnemy.entityId);
-        if (!ent || (ent.hp ?? 0) <= 0) {
+        if (!ent) {
+          console.log('[ENTITY_ATTACK] Entity not found in mapObjects:', u.targetEnemy.entityId);
+          u.targetEnemy = null;
+        } else if ((ent.hp ?? 0) <= 0) {
+          console.log('[ENTITY_ATTACK] Entity dead:', ent.kind, ent.hp);
           u.targetEnemy = null;
         } else {
           // If an attackPoint was provided (from right-click), use it as approach target
@@ -680,6 +739,7 @@ if (!u.manualMove) {
 
           // If effective distance is greater than attack range, approach the attackPoint (or center). Otherwise attack.
           if (effectiveDist > UNIT_ATTACK_RANGE) {
+            console.log('[ENTITY_ATTACK] Moving to entity:', ent.kind, 'dist:', effectiveDist.toFixed(1), 'attackRange:', UNIT_ATTACK_RANGE);
             const moveSpeed = CHASE_SPEED * dtScale;
             const approach = Math.max(0, effectiveDist - UNIT_ATTACK_RANGE);
             const step = Math.min(moveSpeed, approach);
@@ -697,6 +757,7 @@ if (!u.manualMove) {
             u.anim = "walk";
             u.dir = getDirKey(dx, dy);
           } else {
+            console.log('[ENTITY_ATTACK] In range! Attacking:', ent.kind, 'hp:', ent.hp);
             u.anim = "attack";
             if (u.attackCooldown >= ATTACK_COOLDOWN) {
               const dmgPerTick = ((stats?.dps ?? UNIT_ATTACK_DPS) / 60) * dtScale;

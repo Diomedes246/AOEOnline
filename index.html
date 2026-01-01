@@ -54,6 +54,235 @@
   #blacksmithBtn:hover { background:#666; }
   #mineBtn:disabled,
   #blacksmithBtn:disabled { background:#222; color:#777; cursor:not-allowed; }
+
+  #questLogToggle {
+    position:fixed;
+    top:110px;
+    left:10px;
+    display:flex;
+    align-items:center;
+    gap:8px;
+    padding:8px 12px;
+    border:2px solid #888;
+    border-radius:6px;
+    background:rgba(30,30,30,0.85);
+    color:white;
+    font-family:monospace;
+    font-weight:normal;
+    text-transform:none;
+    letter-spacing:normal;
+    cursor:pointer;
+    transition:background 0.2s ease;
+    z-index:1500;
+  }
+  #questLogToggle:hover {
+    background:rgba(40,40,40,0.9);
+  }
+  #questLogToggle.active {
+    background:rgba(50,50,50,0.95);
+    border-color:#aaa;
+  }
+  .quest-log-badge {
+    min-width:20px;
+    padding:2px 6px;
+    border-radius:4px;
+    background:rgba(255,255,255,0.15);
+    color:white;
+    font-size:11px;
+    text-align:center;
+  }
+  #questLogPanel {
+    position:fixed;
+    top:160px;
+    left:10px;
+    width:280px;
+    max-height:calc(100vh - 280px);
+    background:rgba(30,30,30,0.95);
+    border:2px solid #888;
+    border-radius:8px;
+    padding:12px;
+    color:white;
+    font-family:monospace;
+    display:none;
+    overflow:hidden;
+    z-index:1400;
+  }
+  .quest-log-header {
+    display:flex;
+    justify-content:space-between;
+    align-items:flex-start;
+    margin-bottom:10px;
+    gap:10px;
+  }
+  .quest-log-heading {
+    font-size:14px;
+    font-weight:bold;
+  }
+  .quest-log-hint {
+    font-size:11px;
+    opacity:0.7;
+  }
+  .quest-log-count {
+    font-size:11px;
+    padding:3px 6px;
+    border-radius:4px;
+    background:rgba(255,255,255,0.15);
+    color:white;
+    white-space:nowrap;
+  }
+  .quest-log-list {
+    max-height:calc(100vh - 340px);
+    overflow-y:auto;
+    padding-right:4px;
+  }
+  .quest-log-item {
+    background:rgba(255,255,255,0.05);
+    border:1px solid #555;
+    padding:8px 10px;
+    margin-bottom:8px;
+    border-radius:6px;
+    cursor:pointer;
+    transition:background 0.2s ease, border-color 0.2s ease;
+  }
+  .quest-log-item:hover {
+    background:rgba(255,255,255,0.1);
+    border-color:#aaa;
+  }
+  .quest-log-title {
+    font-size:13px;
+    font-weight:bold;
+    margin-bottom:4px;
+  }
+  .quest-log-summary {
+    font-size:11px;
+    opacity:0.85;
+    margin-bottom:4px;
+  }
+  .quest-log-coords {
+    font-size:10px;
+    opacity:0.6;
+  }
+  .quest-log-empty {
+    font-size:11px;
+    opacity:0.7;
+    padding:10px;
+    border:1px dashed rgba(255,255,255,0.3);
+    border-radius:6px;
+  }
+
+  #questDialog {
+    position:fixed;
+    inset:0;
+    background:rgba(0,0,0,0.6);
+    display:none;
+    align-items:center;
+    justify-content:center;
+    z-index:2500;
+  }
+  .quest-dialog-card {
+    width:420px;
+    max-width:90vw;
+    background:rgba(20,20,20,0.98);
+    border:2px solid #888;
+    border-radius:10px;
+    padding:18px;
+    color:white;
+    font-family:monospace;
+    box-shadow:0 20px 40px rgba(0,0,0,0.7);
+  }
+  .quest-dialog-header {
+    display:flex;
+    justify-content:space-between;
+    gap:16px;
+    align-items:flex-start;
+    margin-bottom:12px;
+  }
+  .quest-dialog-title {
+    font-size:18px;
+    font-weight:700;
+  }
+  .quest-dialog-type {
+    font-size:12px;
+    opacity:0.75;
+    letter-spacing:0.08em;
+    text-transform:uppercase;
+  }
+  .quest-dialog-close {
+    border:none;
+    background:transparent;
+    color:#f8fafc;
+    font-size:20px;
+    cursor:pointer;
+    padding:0;
+    line-height:1;
+  }
+  .quest-dialog-summary {
+    font-size:13px;
+    line-height:1.5;
+    margin-bottom:16px;
+    opacity:0.9;
+  }
+  .quest-dialog-section-title {
+    font-size:12px;
+    font-weight:bold;
+    color:white;
+    opacity:0.9;
+    margin-bottom:6px;
+  }
+  #questDialogRewards {
+    list-style:none;
+    padding:0;
+    margin:0 0 18px 0;
+  }
+  #questDialogRewards li {
+    padding:6px 0;
+    border-bottom:1px solid rgba(255,255,255,0.08);
+    font-size:13px;
+    display:flex;
+    justify-content:space-between;
+    gap:8px;
+  }
+  .quest-dialog-reward-name {
+    font-weight:600;
+  }
+  .quest-dialog-reward-bonus {
+    font-size:12px;
+    opacity:0.7;
+  }
+  .quest-dialog-actions {
+    display:flex;
+    gap:12px;
+  }
+  .quest-dialog-btn {
+    flex:1;
+    height:36px;
+    border-radius:6px;
+    border:1px solid #777;
+    font-weight:normal;
+    cursor:pointer;
+    font-family:monospace;
+    transition:background 0.2s ease;
+  }
+  .quest-dialog-btn.primary {
+    background:#444;
+    color:white;
+    border-color:#aaa;
+  }
+  .quest-dialog-btn.primary:hover {
+    background:#555;
+  }
+  .quest-dialog-btn.secondary {
+    background:rgba(255,255,255,0.08);
+    color:white;
+    border-color:#777;
+  }
+  .quest-dialog-btn.secondary:hover {
+    background:rgba(255,255,255,0.12);
+  }
+  .quest-dialog-btn:disabled {
+    opacity:0.4;
+    cursor:not-allowed;
+  }
   </style>
   </head>
 
@@ -68,7 +297,45 @@
       </div>
     </div>
   <canvas id="game"></canvas>
+  <div id="billboards-container" style="position:fixed; top:0; left:0; pointer-events:none; z-index:100;"></div>
   <div id="hud"></div>
+
+  <button id="questLogToggle">
+    <span id="questLogToggleLabel">Quest Log</span>
+    <span id="questLogToggleCount" class="quest-log-badge">0</span>
+  </button>
+
+  <div id="questLogPanel">
+    <div class="quest-log-header">
+      <div>
+        <div class="quest-log-heading">Quest Log</div>
+        <div class="quest-log-hint">NPCs with gold icons offer quests.</div>
+      </div>
+      <div id="questLogCount" class="quest-log-count">0 quests</div>
+    </div>
+    <div id="questLogList" class="quest-log-list"></div>
+  </div>
+
+  <div id="questDialog">
+    <div class="quest-dialog-card">
+      <div class="quest-dialog-header">
+        <div>
+          <div id="questDialogTitle" class="quest-dialog-title">Quest Giver</div>
+          <div id="questDialogType" class="quest-dialog-type">Quest Details</div>
+        </div>
+        <button id="questDialogClose" class="quest-dialog-close" aria-label="Close quest dialog">×</button>
+      </div>
+      <div id="questDialogSummary" class="quest-dialog-summary"></div>
+      <div>
+        <div class="quest-dialog-section-title">Rewards</div>
+        <ul id="questDialogRewards"></ul>
+      </div>
+      <div class="quest-dialog-actions">
+        <button id="questDeclineBtn" class="quest-dialog-btn secondary">Decline</button>
+        <button id="questAcceptBtn" class="quest-dialog-btn primary">Accept Quest</button>
+      </div>
+    </div>
+  </div>
 
   <div id="panel">
     <div>Buidlings</div>
@@ -125,7 +392,9 @@
       Shift+Left click: delete<br/>
       c: toggle collision for object<br/>
       Scroll: collision size<br/>
-      Shift+Scroll: tile size 
+      Shift+Scroll: tile size <br/>
+      Ctrl+Click: select to change position<br/>
+      Alt+Click (NPC/Spider selected): add/move waypoint | Shift+Alt+Click: remove waypoint<br/>
     </div>
     <button id="entityBtn" style="width:100%; height:36px; margin-top:8px;">
     Entity: OFF
@@ -166,6 +435,21 @@
     <div style="margin-top:10px;">
       <div style="font-size:12px; opacity:0.8;">Biography</div>
       <textarea id="entityBioInput" style="width:100%; height:90px;"></textarea>
+      <div style="margin-top:6px; font-size:11px; opacity:0.7; line-height:1.3;">
+        Quest syntax: <code style="background:rgba(255,255,255,0.1); padding:2px 4px;">[Type: Kill](n=5, entity=spider)</code>
+      </div>
+    </div>
+
+    <div style="margin-top:10px;">
+      <div style="font-size:12px; opacity:0.8;">Z-Order (render depth)</div>
+      <input id="entityZOrderInput" type="number" style="width:100%; height:30px;" placeholder="0" />
+    </div>
+
+    <div style="margin-top:10px;">
+      <label style="display:flex; align-items:center; gap:8px; font-size:12px; opacity:0.9; cursor:pointer;">
+        <input id="entityQuestToggle" type="checkbox" style="cursor:pointer;" />
+        <span>Gives Quest</span>
+      </label>
     </div>
 
     <div style="margin-top:10px;">
@@ -378,9 +662,35 @@
   <script src="static/input.js"></script>
   <script src="static/update.js"></script>
   <script src="static/draw.js"></script>
+  <script src="static/billboard.js"></script>
   <script src="static/editor.js"></script>
 
   <script>
+  // ===== QUEST PARSING =====
+  function parseQuestFromBio(bio) {
+    if (!bio || typeof bio !== 'string') return null;
+    
+    // Pattern: [Type: QuestType](param1=val1, param2=val2)
+    const match = bio.match(/\[Type:\s*(\w+)\]\s*\(([^)]+)\)/);
+    if (!match) return null;
+    
+    const questType = match[1];
+    const paramsStr = match[2];
+    
+    // Parse params like "n=5, entity=spider"
+    const params = {};
+    const paramPairs = paramsStr.split(',');
+    for (const pair of paramPairs) {
+      const [key, value] = pair.trim().split('=').map(s => s.trim());
+      if (key && value) {
+        // Try to parse as number, otherwise keep as string
+        params[key] = isNaN(value) ? value : parseInt(value, 10);
+      }
+    }
+    
+    return { type: questType, params };
+  }
+  
   /* ================= SETUP ================= */
   const ctx = canvas.getContext("2d");
   const hud = document.getElementById("hud");
@@ -508,6 +818,37 @@
     entityBioInput.style.opacity   = canEdit ? "1" : "0.7";
   }
 
+  // Track when user is actively editing entity fields
+  entityTitleInput.addEventListener("focus", () => { isEditingEntity = true; });
+  entityTitleInput.addEventListener("blur", () => { isEditingEntity = false; });
+  entityBioInput.addEventListener("focus", () => { isEditingEntity = true; });
+  entityBioInput.addEventListener("blur", () => { isEditingEntity = false; });
+  
+  const entityZOrderInput = document.getElementById("entityZOrderInput");
+  if (entityZOrderInput) {
+    entityZOrderInput.addEventListener("focus", () => { isEditingEntity = true; });
+    entityZOrderInput.addEventListener("blur", () => { isEditingEntity = false; });
+  }
+  
+  const entityQuestToggle = document.getElementById("entityQuestToggle");
+  if (entityQuestToggle) {
+    const beginQuestEdit = () => { isEditingEntity = true; };
+    const endQuestEdit = () => { isEditingEntity = false; };
+
+    entityQuestToggle.addEventListener("focus", beginQuestEdit);
+    entityQuestToggle.addEventListener("blur", endQuestEdit);
+
+    entityQuestToggle.addEventListener("change", () => {
+      isEditingEntity = true;
+
+      if (!selectedEntityId) return;
+      const target = mapObjects.find(x => x.id === selectedEntityId);
+      if (!target) return;
+      ensureEntityMeta(target);
+      target.meta.givesQuest = !!entityQuestToggle.checked;
+    });
+  }
+
 
   /* ================= PLAYER SPRITES ================= */
 
@@ -516,6 +857,8 @@
   const DIRECTIONS = [0, 22, 45, 67, 90, 112, 135, 157, 180, 202, 225, 247, 270, 292, 315, 337];
   const IDLE_FRAMES = 24;
   const WALK_FRAMES = 24;
+  const NPC_WALK_FRAMES = 16;
+  const SPIDER_WALK_FRAMES = 9;
   const ANIM_SPEED = 0.3;
 
 
@@ -828,6 +1171,12 @@
 
     entityTitleInput.value = o.meta.title || getDefaultEntityTitle(o);
     entityBioInput.value = o.meta.bio || "";
+    
+    // Set quest toggle
+    const questToggle = document.getElementById("entityQuestToggle");
+    if (questToggle) {
+      questToggle.checked = !!o.meta.givesQuest;
+    }
 
     renderEntityActions(o);
 
@@ -1205,16 +1554,52 @@
 
 
   entitySaveBtn.onclick = () => {
-    if (!selectedEntityId) return;
+    if (!selectedEntityId) {
+      console.log("entitySaveBtn: no selectedEntityId");
+      return;
+    }
     const o = mapObjects.find(x => x.id === selectedEntityId);
-    if (!o) return;
+    if (!o) {
+      console.log("entitySaveBtn: entity not found in mapObjects", selectedEntityId);
+      return;
+    }
 
-    if (o.type === "tile" && !editorMode) return;
+    // Allow billboard editing without editor mode
+    if (o.type === "tile" && o.kind !== 'billboard' && !editorMode) {
+      console.log("entitySaveBtn: cannot edit tile without editor mode", o.kind);
+      return;
+    }
 
     ensureEntityMeta(o);
     o.meta.title = entityTitleInput.value || "";
     o.meta.bio = entityBioInput.value || "";
-    socket.emit("update_map_object", { id: o.id, meta: o.meta });
+    
+    // Save z-order
+    const zOrderInput = document.getElementById("entityZOrderInput");
+    if (zOrderInput && zOrderInput.value !== "") {
+      o.meta.z = parseFloat(zOrderInput.value) || 0;
+    }
+    
+    // Save quest toggle
+    const questToggle = document.getElementById("entityQuestToggle");
+    if (questToggle) {
+      o.meta.givesQuest = !!questToggle.checked;
+    }
+    
+    const updatePayload = { id: o.id, meta: o.meta };
+    console.log("entitySaveBtn: full meta.givesQuest =", updatePayload.meta.givesQuest);
+    
+    if (!socket || !socket.connected) {
+      console.error("entitySaveBtn: socket not connected!");
+      alert("Error: Socket not connected. Changes not saved.");
+      return;
+    }
+    
+    socket.emit("update_map_object", updatePayload);
+    console.log("entitySaveBtn: update emitted successfully");
+    
+    // Clear the editing flag so server updates can refresh the inspector
+    isEditingEntity = false;
     entityPanelEl.style.display = "none";
   };
 
@@ -1223,7 +1608,8 @@
     const o = mapObjects.find(x => x.id === selectedEntityId);
     if (!o) return;
 
-    if (o.type === "tile" && !editorMode) return;
+    // Allow billboard deletion without editor mode
+    if (o.type === "tile" && o.kind !== 'billboard' && !editorMode) return;
 
     socket.emit("delete_map_object", { id: selectedEntityId });
     entityPanelEl.style.display = "none";
@@ -1240,6 +1626,17 @@
     walkshadow:{},
   };
 
+  const npcSprites = {
+    idle: {},
+    walk: {},
+    idleshadow:{},
+    walkshadow:{},
+  };
+
+  const spiderSprites = {
+    walk: {},
+  };
+
   function pad(num, length=3) { return num.toString().padStart(length, "0"); }
   function padFrame(num, length=4) { return num.toString().padStart(length, "0"); }
 
@@ -1253,17 +1650,24 @@
     playerSprites.idleshadow[d] = [];
     playerSprites.walkshadow[d] = [];
 
-    // Idle frames
+    npcSprites.idle[d] = [];
+    npcSprites.walk[d] = [];
+    npcSprites.idleshadow[d] = [];
+    npcSprites.walkshadow[d] = [];
+
+    // Idle frames (same for both)
     for (let i = 1; i <= IDLE_FRAMES; i++) {
       const img = new Image();
       img.src = `static/Idle/Body/${d}/Idle_Body_${d}_${padFrame(i)}.png`;
       playerSprites.idle[d].push(img);
+      npcSprites.idle[d].push(img); // Share idle sprites
       const imgshadow = new Image();
       imgshadow.src = `static/Idle/Shadow/${d}/Idle_Shadow_${d}_${padFrame(i)}.png`;
       playerSprites.idleshadow[d].push(imgshadow);
+      npcSprites.idleshadow[d].push(imgshadow);
     }
 
-    // Walk frames
+    // Player walk frames (Run folder)
     for (let i = 1; i <= WALK_FRAMES; i++) {
       const img = new Image();
       img.src = `static/Run/Body/${d}/Run_Body_${d}_${padFrame(i)}.png`;
@@ -1271,6 +1675,24 @@
       const imgshadow = new Image();
       imgshadow.src = `static/Run/Shadow/${d}/Run_Shadow_${d}_${padFrame(i)}.png`;
       playerSprites.walkshadow[d].push(imgshadow);
+    }
+
+    // NPC walk frames (Walk folder - 16 frames)
+    for (let i = 1; i <= NPC_WALK_FRAMES; i++) {
+      const img = new Image();
+      img.src = `static/Walk/Body/${d}/Walk_Body_${d}_${padFrame(i)}.png`;
+      npcSprites.walk[d].push(img);
+      const imgshadow = new Image();
+      imgshadow.src = `static/Walk/Shadow/${d}/Walk_Shadow_${d}_${padFrame(i)}.png`;
+      npcSprites.walkshadow[d].push(imgshadow);
+    }
+
+    // Spider walk frames (spiderframes/walk_forward/body folder - 16 frames, 1-indexed)
+    spiderSprites.walk[d] = [];
+    for (let i = 1; i <= SPIDER_WALK_FRAMES; i++) {
+      const img = new Image();
+      img.src = `static/spiderframes/walk_forward/body/${d}/Walk_Forward_Body_${d}_${padFrame(i)}.png`;
+      spiderSprites.walk[d].push(img);
     }
   }
 
@@ -1670,11 +2092,332 @@
 
 
   let mapObjects = []; // persistent objects from server
+  let isEditingEntity = false; // flag to prevent refresh while editing
+  let acceptedQuestIds = new Set();
+  let questProgress = {}; // questId -> { kills: { entity: count } }
+
+  try {
+    const storedQuestIds = JSON.parse(localStorage.getItem("aoeAcceptedQuests") || "[]");
+    if (Array.isArray(storedQuestIds)) {
+      acceptedQuestIds = new Set(storedQuestIds);
+    }
+  } catch (err) {
+    acceptedQuestIds = new Set();
+  }
+
+  try {
+    const storedProgress = JSON.parse(localStorage.getItem("aoeQuestProgress") || "{}");
+    if (storedProgress && typeof storedProgress === 'object') {
+      questProgress = storedProgress;
+    }
+  } catch (err) {
+    questProgress = {};
+  }
+
+  function persistQuestProgress() {
+    try {
+      localStorage.setItem("aoeQuestProgress", JSON.stringify(questProgress));
+    } catch (err) {
+      console.warn("Failed to persist quest progress", err);
+    }
+  }
+
+  function getQuestProgress(questId) {
+    return questProgress[questId] || { kills: {} };
+  }
+
+  function incrementQuestKill(questId, entityKind) {
+    if (!questProgress[questId]) {
+      questProgress[questId] = { kills: {} };
+    }
+    if (!questProgress[questId].kills) {
+      questProgress[questId].kills = {};
+    }
+    questProgress[questId].kills[entityKind] = (questProgress[questId].kills[entityKind] || 0) + 1;
+    persistQuestProgress();
+    syncQuestLogUI();
+  }
+
+  function isQuestComplete(obj) {
+    const quest = parseQuestFromBio(obj?.meta?.bio);
+    if (!quest || quest.type !== 'Kill') return false;
+    const progress = getQuestProgress(obj.id);
+    const target = quest.params.n || 0;
+    const entity = quest.params.entity || '';
+    const current = progress.kills[entity] || 0;
+    return current >= target;
+  }
+
+  const questLogToggleBtn = document.getElementById("questLogToggle");
+  const questLogToggleLabel = document.getElementById("questLogToggleLabel");
+  const questLogToggleCount = document.getElementById("questLogToggleCount");
+  const questLogPanel = document.getElementById("questLogPanel");
+  const questLogList = document.getElementById("questLogList");
+  const questLogCountEl = document.getElementById("questLogCount");
+  const questDialogOverlay = document.getElementById("questDialog");
+  const questDialogTitle = document.getElementById("questDialogTitle");
+  const questDialogType = document.getElementById("questDialogType");
+  const questDialogSummary = document.getElementById("questDialogSummary");
+  const questDialogRewards = document.getElementById("questDialogRewards");
+  const questAcceptBtn = document.getElementById("questAcceptBtn");
+  const questDeclineBtn = document.getElementById("questDeclineBtn");
+  const questDialogCloseBtn = document.getElementById("questDialogClose");
+  let questLogVisible = false;
+  let questDialogEntityId = null;
+
+  function persistAcceptedQuests() {
+    try {
+      localStorage.setItem("aoeAcceptedQuests", JSON.stringify(Array.from(acceptedQuestIds)));
+    } catch (err) {
+      console.warn("Failed to persist quests", err);
+    }
+  }
+
+  function questGiverEntities() {
+    return (mapObjects || []).filter(o => o?.meta?.givesQuest);
+  }
+
+  function acceptedQuestEntities() {
+    return questGiverEntities().filter(o => acceptedQuestIds.has(o.id));
+  }
+
+  function describeQuest(obj) {
+    const quest = parseQuestFromBio(obj.meta?.bio);
+    if (!quest) {
+      const trimmed = (obj.meta?.bio || "").trim();
+      return trimmed ? trimmed.slice(0, 160) : "Speak with this NPC to learn their task.";
+    }
+    
+    // Show progress for kill quests
+    if (quest.type === 'Kill' && quest.params.n && quest.params.entity) {
+      const progress = getQuestProgress(obj.id);
+      const current = progress.kills[quest.params.entity] || 0;
+      const target = quest.params.n;
+      const entityName = quest.params.entity.charAt(0).toUpperCase() + quest.params.entity.slice(1);
+      return `Kill ${entityName}s: ${current}/${target}`;
+    }
+    
+    const params = Object.entries(quest.params || {})
+      .map(([k, v]) => `${k}: ${v}`)
+      .join(" · ");
+    return params ? `${quest.type} — ${params}` : quest.type;
+  }
+
+  function rebuildQuestLogList() {
+    if (!questLogList) return;
+    questLogList.innerHTML = "";
+    const quests = acceptedQuestEntities();
+    if (quests.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "quest-log-empty";
+      empty.textContent = "No accepted quests yet. Talk to a quest giver and accept their offer to track it here.";
+      questLogList.appendChild(empty);
+      return;
+    }
+
+    quests
+      .slice()
+      .sort((a, b) => (a.meta?.title || a.kind || "").localeCompare(b.meta?.title || b.kind || ""))
+      .forEach(obj => {
+        const card = document.createElement("div");
+        card.className = "quest-log-item";
+
+        const titleEl = document.createElement("div");
+        titleEl.className = "quest-log-title";
+        titleEl.textContent = obj.meta?.title || getDefaultEntityTitle(obj);
+        card.appendChild(titleEl);
+
+        const summaryEl = document.createElement("div");
+        summaryEl.className = "quest-log-summary";
+        const description = describeQuest(obj);
+        const complete = isQuestComplete(obj);
+        summaryEl.textContent = description;
+        if (complete) {
+          summaryEl.style.color = "#4ade80";
+          summaryEl.textContent += " ✓ COMPLETE";
+        }
+        card.appendChild(summaryEl);
+
+        const coordsEl = document.createElement("div");
+        coordsEl.className = "quest-log-coords";
+        const cx = Number.isFinite(obj.x) ? Math.round(obj.x) : 0;
+        const cy = Number.isFinite(obj.y) ? Math.round(obj.y) : 0;
+        coordsEl.textContent = `Near (${cx}, ${cy})`;
+        card.appendChild(coordsEl);
+
+        card.addEventListener("click", () => {
+          openEntityInspector(obj);
+        });
+
+        questLogList.appendChild(card);
+      });
+  }
+
+  function syncQuestLogUI() {
+    const total = acceptedQuestEntities().length;
+    if (questLogCountEl) questLogCountEl.textContent = `${total} quest${total === 1 ? "" : "s"}`;
+    if (questLogToggleCount) questLogToggleCount.textContent = String(total);
+    if (questLogToggleLabel) questLogToggleLabel.textContent = questLogVisible ? "Hide Quest Log" : "Quest Log";
+    if (questLogVisible) rebuildQuestLogList();
+  }
+
+  function setQuestLogVisibility(visible) {
+    questLogVisible = !!visible;
+    if (questLogPanel) questLogPanel.style.display = questLogVisible ? "block" : "none";
+    if (questLogToggleBtn) questLogToggleBtn.classList.toggle("active", questLogVisible);
+    syncQuestLogUI();
+  }
+
+  if (questLogToggleBtn) {
+    questLogToggleBtn.addEventListener("click", () => {
+      setQuestLogVisibility(!questLogVisible);
+    });
+  }
+
+  function questRewardsForEntity(obj) {
+    if (!obj) return [];
+    if (!Array.isArray(obj.itemSlots)) return [];
+    return obj.itemSlots.filter(slot => slot && typeof slot === "object");
+  }
+
+  function rewardLabel(item) {
+    if (!item || typeof item !== "object") return "Mystery Item";
+    const name = item.name || "Item";
+    const bonus = (item.bonus !== undefined && item.bonus !== null && item.bonus !== "") ? ` +${item.bonus}` : "";
+    return { name, bonus: bonus }; // return structured to avoid string concat later
+  }
+
+  function fillQuestDialogRewards(obj) {
+    if (!questDialogRewards) return;
+    questDialogRewards.innerHTML = "";
+    const rewards = questRewardsForEntity(obj);
+    if (rewards.length === 0) {
+      const li = document.createElement("li");
+      li.textContent = "No rewards listed";
+      questDialogRewards.appendChild(li);
+      return;
+    }
+    rewards.forEach(item => {
+      const li = document.createElement("li");
+      const label = rewardLabel(item);
+      const spanName = document.createElement("span");
+      spanName.className = "quest-dialog-reward-name";
+      spanName.textContent = label.name;
+      const spanBonus = document.createElement("span");
+      spanBonus.className = "quest-dialog-reward-bonus";
+      spanBonus.textContent = label.bonus;
+      if (!label.bonus) spanBonus.style.display = "none";
+      li.appendChild(spanName);
+      li.appendChild(spanBonus);
+      questDialogRewards.appendChild(li);
+    });
+  }
+
+  function closeQuestDialog() {
+    questDialogEntityId = null;
+    if (questDialogOverlay) questDialogOverlay.style.display = "none";
+  }
+
+  function showQuestDialog(obj) {
+    if (!obj || !questDialogOverlay) return;
+    ensureEntityMeta(obj);
+    questDialogEntityId = obj.id;
+    const quest = parseQuestFromBio(obj.meta?.bio);
+    if (questDialogTitle) questDialogTitle.textContent = obj.meta?.title || getDefaultEntityTitle(obj);
+    if (questDialogType) {
+      const typeLabel = quest?.type ? `${quest.type} Quest` : "Quest Details";
+      questDialogType.textContent = typeLabel;
+    }
+    if (questDialogSummary) questDialogSummary.textContent = describeQuest(obj);
+    fillQuestDialogRewards(obj);
+
+    const alreadyAccepted = acceptedQuestIds.has(obj.id);
+    if (questAcceptBtn) {
+      questAcceptBtn.disabled = alreadyAccepted;
+      questAcceptBtn.textContent = alreadyAccepted ? "Quest Accepted" : "Accept Quest";
+    }
+    if (questDialogOverlay) questDialogOverlay.style.display = "flex";
+  }
+
+  window.showQuestDialog = showQuestDialog;
+
+  if (questDialogCloseBtn) questDialogCloseBtn.addEventListener("click", closeQuestDialog);
+  if (questDeclineBtn) questDeclineBtn.addEventListener("click", closeQuestDialog);
+  if (questDialogOverlay) {
+    questDialogOverlay.addEventListener("click", (e) => {
+      if (e.target === questDialogOverlay) closeQuestDialog();
+    });
+  }
+
+  if (questAcceptBtn) {
+    questAcceptBtn.addEventListener("click", () => {
+      if (!questDialogEntityId) return;
+      acceptedQuestIds.add(questDialogEntityId);
+      persistAcceptedQuests();
+      
+      // Initialize quest progress if it's a kill quest
+      const obj = mapObjects.find(o => o.id === questDialogEntityId);
+      if (obj) {
+        const quest = parseQuestFromBio(obj.meta?.bio);
+        if (quest && quest.type === 'Kill') {
+          if (!questProgress[questDialogEntityId]) {
+            questProgress[questDialogEntityId] = { kills: {} };
+            if (quest.params.entity) {
+              questProgress[questDialogEntityId].kills[quest.params.entity] = 0;
+            }
+            persistQuestProgress();
+          }
+        }
+      }
+      
+      setQuestLogVisibility(true);
+      closeQuestDialog();
+    });
+  }
+
+  syncQuestLogUI();
 
   socket.on("map_objects", (objs) => {
+    const inspectorOpen = (
+      selectedEntityId &&
+      entityPanelEl &&
+      entityPanelEl.style.display === "block"
+    );
+
+    if (inspectorOpen && Array.isArray(objs)) {
+      const incoming = objs.find(x => x.id === selectedEntityId);
+      if (incoming) {
+        ensureEntityMeta(incoming);
+        // Keep local inspector edits applied client-side until save
+        incoming.meta.title = entityTitleInput.value;
+        incoming.meta.bio = entityBioInput.value;
+
+        const zOrderInput = document.getElementById("entityZOrderInput");
+        if (zOrderInput && zOrderInput.value !== "") {
+          const zValue = parseFloat(zOrderInput.value);
+          if (!Number.isNaN(zValue)) incoming.meta.z = zValue;
+        }
+
+        const questToggle = document.getElementById("entityQuestToggle");
+        if (questToggle) {
+          incoming.meta.givesQuest = !!questToggle.checked;
+        }
+      }
+    }
+
     mapObjects = objs || [];
-    // If entity inspector is open for an entity, refresh it immediately
-    if (selectedEntityId) {
+    const validQuestIds = new Set(questGiverEntities().map(o => o.id));
+    let pruned = false;
+    acceptedQuestIds.forEach((questId) => {
+      if (!validQuestIds.has(questId)) {
+        acceptedQuestIds.delete(questId);
+        pruned = true;
+      }
+    });
+    if (pruned) persistAcceptedQuests();
+    syncQuestLogUI();
+    // If entity inspector is open for an entity, refresh it only if user is not actively editing
+    if (selectedEntityId && !isEditingEntity) {
       const updated = mapObjects.find(x => x.id === selectedEntityId);
       if (updated && entityPanelEl && entityPanelEl.style.display === "block") {
         openEntityInspector(updated);
@@ -1689,7 +2432,35 @@
     try {
       const o = (mapObjects || []).find(x => x.id === entityId);
       if (o) {
+        const wasAlive = o.hp > 0;
         o.hp = hp;
+        
+        // Track quest kills when entity dies
+        if (wasAlive && hp <= 0) {
+          const entityKind = o.kind || o.type;
+          console.log("[QUEST] Entity killed:", entityKind, entityId);
+          
+          // Check all accepted kill quests
+          for (const questId of acceptedQuestIds) {
+            const questGiver = mapObjects.find(obj => obj.id === questId);
+            if (!questGiver) continue;
+            
+            const quest = parseQuestFromBio(questGiver.meta?.bio);
+            if (quest && quest.type === 'Kill' && quest.params.entity === entityKind) {
+              incrementQuestKill(questId, entityKind);
+              const progress = getQuestProgress(questId);
+              const current = progress.kills[entityKind] || 0;
+              const target = quest.params.n || 0;
+              console.log(`[QUEST] Progress: ${current}/${target} ${entityKind}s killed`);
+              
+              // Show notification if quest complete
+              if (current >= target) {
+                console.log(`[QUEST] Quest complete! Return to quest giver.`);
+              }
+            }
+          }
+        }
+        
         // refresh inspector if open for this entity
         if (selectedEntityId === entityId && entityPanelEl && entityPanelEl.style.display === 'block') {
           openEntityInspector(o);

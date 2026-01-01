@@ -46,6 +46,24 @@ function rebuildBrushSelect(tileNames) {
   // keep the first option (Building)
   brushSelect.innerHTML = "";
 
+  // Add billboard option first
+  const billboardOpt = document.createElement("option");
+  billboardOpt.value = "tile:billboard";
+  billboardOpt.textContent = "Special: Billboard";
+  brushSelect.appendChild(billboardOpt);
+
+  // Add NPC option
+  const npcOpt = document.createElement("option");
+  npcOpt.value = "tile:npc";
+  npcOpt.textContent = "Special: NPC";
+  brushSelect.appendChild(npcOpt);
+
+  // Add Spider option
+  const spiderOpt = document.createElement("option");
+  spiderOpt.value = "tile:spider";
+  spiderOpt.textContent = "Special: Spider";
+  brushSelect.appendChild(spiderOpt);
+
   for (const name of tileNames) {
     const opt = document.createElement("option");
     opt.value = `tile:${name}`;
@@ -144,6 +162,15 @@ for (const name of tileNames) {
       tileNames.push("town_center");
     }
 
+    // Add billboard as a special tile type
+    TILE_DEFS["billboard"] = { w: 300, h: 200, isBillboard: true };
+    
+    // Add NPC as a special tile type
+    TILE_DEFS["npc"] = { w: 64, h: 64, isNPC: true };
+    
+    // Add Spider as a special tile type
+    TILE_DEFS["spider"] = { w: 64, h: 64, isSpider: true };
+    
     rebuildBrushSelect(tileNames);
   } catch (err) {
     console.error("Failed to load tiles manifest:", err);
@@ -173,6 +200,35 @@ canvas.addEventListener("wheel", (e) => {
   e.preventDefault();
 
   const delta = Math.sign(e.deltaY);
+
+  // If entity is selected, adjust its collision box
+  if (window.selectedEditorEntity) {
+    const ent = window.selectedEditorEntity;
+    if (!ent.meta) ent.meta = {};
+    
+    const currentCW = ent.meta.cw || 256;
+    const currentCH = ent.meta.ch || 256;
+    
+    const newCW = Math.max(
+      COLLISION_MIN,
+      Math.min(COLLISION_MAX, currentCW - delta * COLLISION_STEP)
+    );
+    const newCH = Math.max(
+      COLLISION_MIN,
+      Math.min(COLLISION_MAX, currentCH - delta * COLLISION_STEP)
+    );
+    
+    ent.meta.cw = newCW;
+    ent.meta.ch = newCH;
+    
+    // Update server
+    socket.emit("update_map_object", {
+      id: ent.id,
+      meta: { cw: newCW, ch: newCH }
+    });
+    
+    return;
+  }
 
   // SHIFT = scale the TILE DRAW SIZE (preview + placed size)
 if (e.shiftKey) {

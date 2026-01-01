@@ -16,6 +16,10 @@ function resetCollisionOffset() {
   editorCollisionOffsetY = 0;
 }
 
+// Track selected entity in editor mode for movement
+if (typeof window.selectedEditorEntity === "undefined") window.selectedEditorEntity = null;
+var selectedEditorEntity = window.selectedEditorEntity;
+
 // Small helper to mirror formation offsets from update.js
 function getUnitTargetOffsetClient(idx, total) {
   const angle = (idx / Math.max(1, total)) * Math.PI * 2;
@@ -35,13 +39,40 @@ document.addEventListener("keydown", (e) => {
     editorCollisionEnabled = !editorCollisionEnabled;
   }
 
-  // Nudge collision center with arrow keys while in editor (fixed 1px step)
+  // Escape key: deselect entity
+  if (!e.repeat && e.key === "Escape" && window.selectedEditorEntity) {
+    window.selectedEditorEntity = null;
+    // Re-enable brush dropdown
+    const brushSelect = document.getElementById('brushSelect');
+    if (brushSelect) brushSelect.disabled = false;
+    e.preventDefault();
+  }
+
+  // Arrow keys in editor: move selected entity (default) or collision offset (with Shift)
   if (editorMode && ["ArrowLeft","ArrowRight","ArrowUp","ArrowDown"].includes(e.key)) {
-    const step = 1;
-    if (e.key === "ArrowLeft") editorCollisionOffsetX -= step;
-    if (e.key === "ArrowRight") editorCollisionOffsetX += step;
-    if (e.key === "ArrowUp") editorCollisionOffsetY -= step;
-    if (e.key === "ArrowDown") editorCollisionOffsetY += step;
+    if (e.shiftKey) {
+      // Shift+Arrow: adjust collision offset
+      const step = 1;
+      if (e.key === "ArrowLeft") editorCollisionOffsetX -= step;
+      if (e.key === "ArrowRight") editorCollisionOffsetX += step;
+      if (e.key === "ArrowUp") editorCollisionOffsetY -= step;
+      if (e.key === "ArrowDown") editorCollisionOffsetY += step;
+    } else if (window.selectedEditorEntity) {
+      // Arrow: move selected entity
+      const step = 5;
+      const ent = window.selectedEditorEntity;
+      if (e.key === "ArrowLeft") ent.x -= step;
+      if (e.key === "ArrowRight") ent.x += step;
+      if (e.key === "ArrowUp") ent.y -= step;
+      if (e.key === "ArrowDown") ent.y += step;
+      
+      // Update server with new position
+      socket.emit("update_map_object", {
+        id: ent.id,
+        x: ent.x,
+        y: ent.y
+      });
+    }
     e.preventDefault();
   }
 });
@@ -135,18 +166,19 @@ canvas.addEventListener("mousemove", e=>{
     }
   }
 
-  // Enemy entity hover (priority 4) - buildings/town centers/mines/blacksmiths
+  // Enemy entity hover (priority 4) - buildings/town centers/mines/blacksmiths/spiders
   for (let i = (mapObjects || []).length - 1; i >= 0; i--) {
     const o = mapObjects[i];
     if (!o || !o.meta || !o.meta.entity) continue;
     if (o.owner === mySid) continue;
-    if (!(o.type === 'building' || o.kind === 'town_center' || o.kind === 'mine' || o.kind === 'blacksmith')) continue;
+    if (!(o.type === 'building' || o.kind === 'town_center' || o.kind === 'mine' || o.kind === 'blacksmith' || o.kind === 'spider')) continue;
 
     let w = BUILD_W, h = BUILD_H;
     if (o.type === 'building') { w = BUILD_W; h = BUILD_H; }
     else { const def = TILE_DEFS[o.kind] || { w: 256, h: 256 }; w = o.meta?.w ?? def.w; h = o.meta?.h ?? def.h; }
 
     if (Math.abs(wx - o.x) < w/2 && Math.abs(wy - o.y) < h/2) {
+      if (o.kind === 'spider') console.log('[HOVER] Spider detected:', o.id, 'owner:', o.owner, 'w:', w, 'h:', h);
       hoveredAttackEntity = o;
       canvas.style.cursor = 'crosshair';
       return;
@@ -243,8 +275,9 @@ function hitTestMapObject(wx, wy) {
       if (Math.abs(wx - o.x) < BUILD_W / 2 && Math.abs(wy - o.y) < BUILD_H / 2) return o;
     } else if (o.type === "tile") {
       const def = TILE_DEFS[o.kind] || { w: 256, h: 256 };
-      const w = o.meta?.w ?? def.w;
-      const h = o.meta?.h ?? def.h;
+      // Use collision box if available, otherwise use tile size
+      const w = (o.meta?.cw && o.kind !== 'billboard') ? o.meta.cw : (o.meta?.w ?? def.w);
+      const h = (o.meta?.ch && o.kind !== 'billboard') ? o.meta.ch : (o.meta?.h ?? def.h);
       if (Math.abs(wx - o.x) < w / 2 && Math.abs(wy - o.y) < h / 2) return o;
     }
   }
@@ -319,20 +352,124 @@ canvas.addEventListener("mousedown", e => {
     }
   }
 
-  // ✅ Click entity to inspect
-  if (e.button === 0) {
+  // ✅ Ctrl+click in editor mode to select entity for movement
+  if (editorMode && e.button === 0 && e.ctrlKey) {
     const hitEntity = hitTestMapObject(wx, wy);
     if (hitEntity) {
+      window.selectedEditorEntity = hitEntity;
+      // Disable brush dropdown when entity selected
+      const brushSelect = document.getElementById('brushSelect');
+      if (brushSelect) brushSelect.disabled = true;
+      e.preventDefault();
+      return;
+    } else {
+      window.selectedEditorEntity = null;
+      // Re-enable brush dropdown
+      const brushSelect = document.getElementById('brushSelect');
+      if (brushSelect) brushSelect.disabled = false;
+    }
+  }
+
+  // ✅ NPC/Spider waypoint editing when NPC/Spider selected (Alt+click in editor mode)
+  if (editorMode && e.button === 0 && e.altKey && window.selectedEditorEntity && 
+      (window.selectedEditorEntity.kind === 'npc' || window.selectedEditorEntity.kind === 'spider')) {
+    // Refresh NPC/Spider reference from mapObjects (in case it was updated)
+    const npcId = window.selectedEditorEntity.id;
+    const npc = mapObjects.find(o => o.id === npcId);
+    if (!npc) return;
+    
+    if (!npc.meta) npc.meta = {};
+    if (!npc.meta.waypoints) npc.meta.waypoints = [];
+    
+    // Shift+Alt+Click: Remove waypoint
+    if (e.shiftKey) {
+      // Find and remove waypoint within 40px
+      for (let i = 0; i < npc.meta.waypoints.length; i++) {
+        const wp = npc.meta.waypoints[i];
+        const dist = Math.hypot(wx - wp.x, wy - wp.y);
+        if (dist < 40) {
+          // Ensure at least 2 waypoints remain
+          if (npc.meta.waypoints.length > 2) {
+            npc.meta.waypoints.splice(i, 1);
+            
+            // Update server
+            socket.emit("update_map_object", {
+              id: npc.id,
+              meta: npc.meta
+            });
+            
+            window.selectedEditorEntity = npc;
+          }
+          break;
+        }
+      }
+    } else {
+      // Alt+Click (no shift): Move or add waypoint
+      // Check if clicking near an existing waypoint (within 40px) to move it
+      let movedWaypoint = false;
+      for (let i = 0; i < npc.meta.waypoints.length; i++) {
+        const wp = npc.meta.waypoints[i];
+        const dist = Math.hypot(wx - wp.x, wy - wp.y);
+        if (dist < 40) {
+          wp.x = wx;
+          wp.y = wy;
+          movedWaypoint = true;
+          break;
+        }
+      }
+      
+      // If not moving, add new waypoint (max 10)
+      if (!movedWaypoint && npc.meta.waypoints.length < 10) {
+        npc.meta.waypoints.push({ x: wx, y: wy });
+      }
+      
+      // Update server and refresh selectedEditorEntity
+      socket.emit("update_map_object", {
+        id: npc.id,
+        meta: npc.meta
+      });
+      
+      // Update the selected entity reference
+      window.selectedEditorEntity = npc;
+    }
+    
+    e.preventDefault();
+    return;
+  }
+
+  // ✅ Click entity to inspect
+  if (e.button === 0 && !e.ctrlKey && !e.altKey) {
+    const hitEntity = hitTestMapObject(wx, wy);
+    if (hitEntity) {
+      ensureEntityMeta(hitEntity);
+      if (!editorMode && hitEntity.meta && hitEntity.meta.givesQuest && typeof window.showQuestDialog === "function") {
+        window.showQuestDialog(hitEntity);
+        e.preventDefault();
+        return;
+      }
       openEntityInspector(hitEntity);
       e.preventDefault();
       return;
     }
   }
 
-  // ✅ Editor placement (non-shift click)
-  if (editorMode && e.button === 0 && !e.shiftKey) {
+  // ✅ Editor placement (non-shift click, no modifiers, no entity selected)
+  if (editorMode && e.button === 0 && !e.shiftKey && !e.ctrlKey && !e.altKey) {
+
+// Don't place if entity is selected
+if (window.selectedEditorEntity) {
+  return;
+}
 
 const [type, kind] = brushSelect.value.split(":");
+
+// Special handling for billboard - spawn near center
+let placeX = wx;
+let placeY = wy;
+if (kind === 'billboard') {
+  placeX = camera.x;
+  placeY = camera.y;
+}
 
 let meta = (type === "tile") ? {
   collides: editorCollisionEnabled,
@@ -345,7 +482,77 @@ let meta = (type === "tile") ? {
   z: getCurrentZOrder()
 } : {};
 
-if (entityMode) {
+// Add billboard text and force entity mode for billboards
+if (kind === 'billboard') {
+  meta.entity = true;
+  meta.title = 'Welcome!';
+  meta.bio = 'Edit this billboard by clicking it and changing the title and biography in the Entity Inspector.';
+  meta.actions = [];
+  meta.collides = true;
+  meta.cw = 300;
+  meta.ch = 200;
+  meta.cx = meta.cx || 0;
+  meta.cy = meta.cy || 0;
+  meta.w = 300;
+  meta.h = 200;
+} else if (kind === 'npc') {
+  // NPC setup with default 5 waypoints in a circle
+  const radius = 200;
+  const waypoints = [];
+  for (let i = 0; i < 5; i++) {
+    const angle = (i / 5) * Math.PI * 2;
+    waypoints.push({
+      x: placeX + Math.cos(angle) * radius,
+      y: placeY + Math.sin(angle) * radius
+    });
+  }
+  // Start NPC at first waypoint
+  placeX = waypoints[0].x;
+  placeY = waypoints[0].y;
+  
+  meta.entity = true;
+  meta.title = 'NPC';
+  meta.bio = 'An NPC that walks between waypoints';
+  meta.actions = [];
+  meta.collides = false;  // NPCs don't collide
+  meta.waypoints = waypoints;
+  meta.currentWaypointIndex = 0;
+  meta.dir = '000';
+  meta.anim = 'walk';
+  meta.w = 64;
+  meta.h = 64;
+} else if (kind === 'spider') {
+  // Spider setup with default 5 waypoints in a circle
+  const radius = 200;
+  const waypoints = [];
+  for (let i = 0; i < 5; i++) {
+    const angle = (i / 5) * Math.PI * 2;
+    waypoints.push({
+      x: placeX + Math.cos(angle) * radius,
+      y: placeY + Math.sin(angle) * radius
+    });
+  }
+  // Start spider at first waypoint
+  placeX = waypoints[0].x;
+  placeY = waypoints[0].y;
+  
+  meta.entity = true;
+  meta.title = 'Spider';
+  meta.bio = 'A hostile spider that patrols waypoints and attacks nearby players';
+  meta.actions = [];
+  meta.collides = false;  // Spiders don't have collision boxes
+  meta.waypoints = waypoints;
+  meta.currentWaypointIndex = 0;
+  meta.dir = '000';
+  meta.anim = 'walk';
+  meta.w = 100;
+  meta.h = 100;
+  // Also set at top level for server
+  const spiderHp = 50;
+  const spiderMaxHp = 50;
+  meta.hp = spiderHp;
+  meta.maxHp = spiderMaxHp;
+} else if (entityMode) {
   meta = {
     ...meta,
     entity: true,
@@ -356,7 +563,14 @@ if (entityMode) {
   };
 }
 
-socket.emit("place_map_object", { type, kind, x: wx, y: wy, meta });
+// If placing a spider, include HP at top level for server
+const extraData = {};
+if (kind === 'spider') {
+  extraData.hp = meta.hp;
+  extraData.maxHp = meta.maxHp;
+  extraData.owner = null;  // hostile entity
+}
+socket.emit("place_map_object", { type, kind, x: placeX, y: placeY, meta, ...extraData });
 resetCollisionOffset();
 
     return;
@@ -762,6 +976,7 @@ canvas.addEventListener("mouseup", e=>{
         }
 
         const selectedUnits = myUnits.filter(u => u.selected);
+        console.log('[RIGHT_CLICK] Selected units:', selectedUnits.length);
         const moveMarkers = [];
 
         // Helper: find a map entity at world coords (point-in-rect using meta collision or size)
@@ -780,15 +995,52 @@ canvas.addEventListener("mouseup", e=>{
             const right = o.x + w/2;
             const top = o.y - h/2;
             const bottom = o.y + h/2;
-            if (wx >= left && wx <= right && wy >= top && wy <= bottom) return o;
+            if (wx >= left && wx <= right && wy >= top && wy <= bottom) {
+              console.log('[findEntityAt] Found entity:', o.kind, 'at', wx, wy, 'bounds:', {left, right, top, bottom});
+              return o;
+            }
           }
+          console.log('[findEntityAt] No entity found at', wx, wy);
           return null;
         }
 
+        // Helper: check if position is inside a building and adjust to nearest edge
+        function adjustPositionOutsideBuildings(wx, wy) {
+          for (const b of buildings) {
+            const left = b.x - BUILD_W / 2;
+            const right = b.x + BUILD_W / 2;
+            const top = b.y - BUILD_H / 2;
+            const bottom = b.y + BUILD_H / 2;
+            
+            // Check if point is inside building
+            if (wx >= left && wx <= right && wy >= top && wy <= bottom) {
+              // Find nearest edge
+              const distLeft = wx - left;
+              const distRight = right - wx;
+              const distTop = wy - top;
+              const distBottom = bottom - wy;
+              
+              const minDist = Math.min(distLeft, distRight, distTop, distBottom);
+              
+              if (minDist === distLeft) return { x: left - 5, y: wy };
+              if (minDist === distRight) return { x: right + 5, y: wy };
+              if (minDist === distTop) return { x: wx, y: top - 5 };
+              if (minDist === distBottom) return { x: wx, y: bottom + 5 };
+            }
+          }
+          return { x: wx, y: wy };
+        }
+
         let clickedEntity = findEntityAt(wx, wy);
+        console.log('[RIGHT_CLICK] hoveredAttackEntity:', hoveredAttackEntity?.kind, hoveredAttackEntity?.id);
         // If hit-test fails but we have an attack-hovered entity, use it as the clicked entity.
         if (!clickedEntity && typeof hoveredAttackEntity !== 'undefined' && hoveredAttackEntity) {
           clickedEntity = hoveredAttackEntity;
+          console.log('[RIGHT_CLICK] Using hoveredAttackEntity:', clickedEntity.kind);
+        }
+        
+        if (clickedEntity) {
+          console.log('[RIGHT_CLICK] clickedEntity:', clickedEntity.kind, 'owner:', clickedEntity.owner, 'mySid:', mySid);
         }
 
         // Assign a stable formation index and total so units keep their relative positions
@@ -800,7 +1052,11 @@ canvas.addEventListener("mouseup", e=>{
           u.harvesting = null;
 
           // If clicking an enemy entity, set unit to attack that entity instead of moving to its center
-          if (clickedEntity && clickedEntity.owner !== mySid) {
+          // Allow attacking entities with no owner (hostile entities like spiders)
+          const canAttack = clickedEntity && (!clickedEntity.owner || clickedEntity.owner !== mySid);
+          console.log('[ATTACK_CHECK] clickedEntity:', clickedEntity?.kind, 'owner:', clickedEntity?.owner, 'mySid:', mySid, 'canAttack:', canAttack);
+          if (canAttack) {
+            console.log('[ATTACK] Setting targetEnemy for unit', u.id, 'to attack entity', clickedEntity.kind, clickedEntity.id);
             // spread attackers around the entity so they do not stack
             const cw = (clickedEntity.meta && clickedEntity.meta.cw) ? clickedEntity.meta.cw : (clickedEntity.meta && clickedEntity.meta.w ? clickedEntity.meta.w : BUILD_W);
             const ch = (clickedEntity.meta && clickedEntity.meta.ch) ? clickedEntity.meta.ch : (clickedEntity.meta && clickedEntity.meta.h ? clickedEntity.meta.h : BUILD_H);
@@ -821,6 +1077,7 @@ canvas.addEventListener("mouseup", e=>{
               userIssued: true // keep attack order even when far away
             };
             u.manualMove = false;
+            console.log('[ATTACK] targetEnemy set, manualMove:', u.manualMove, 'targetEnemy:', u.targetEnemy);
           } else if (clickedResource) {
             // ✅ resource gather command
             u.targetResource = clickedResource.id;
@@ -830,13 +1087,16 @@ canvas.addEventListener("mouseup", e=>{
           } else {
             // normal move command
             u.targetResource = null;
-            u.tx = wx;
-            u.ty = wy;
+            
+            // Adjust position if inside a building
+            const adjusted = adjustPositionOutsideBuildings(wx, wy);
+            u.tx = adjusted.x;
+            u.ty = adjusted.y;
             u.manualMove = true;
 
             // record a per-unit marker with formation offset for visual feedback
             const offset = getUnitTargetOffsetClient(idx, selectedUnits.length);
-            moveMarkers.push({ x: wx + offset.dx, y: wy + offset.dy, ts: performance.now() });
+            moveMarkers.push({ x: adjusted.x + offset.dx, y: adjusted.y + offset.dy, ts: performance.now() });
           }
         });
 
@@ -883,12 +1143,14 @@ canvas.addEventListener("drop", (e) => {
 function setEntityInspectorEditable(canEdit) {
   const titleInput = document.getElementById("entityTitleInput");
   const bioInput = document.getElementById("entityBioInput");
+  const zOrderInput = document.getElementById("entityZOrderInput");
   const addBtn = document.getElementById("entityAddActionBtn");
   const saveBtn = document.getElementById("entitySaveBtn");
   const deleteBtn = document.getElementById("entityDeleteBtn");
 
   titleInput.disabled = !canEdit;
   bioInput.disabled = !canEdit;
+  if (zOrderInput) zOrderInput.disabled = !canEdit;
   addBtn.disabled = !canEdit;
   saveBtn.disabled = !canEdit;
   deleteBtn.disabled = !canEdit;
@@ -896,6 +1158,7 @@ function setEntityInspectorEditable(canEdit) {
   // Optional visual cue
   titleInput.style.opacity = canEdit ? "1" : "0.7";
   bioInput.style.opacity   = canEdit ? "1" : "0.7";
+  if (zOrderInput) zOrderInput.style.opacity = canEdit ? "1" : "0.7";
 }
 
 function ensureEntityMeta(o) {
@@ -916,25 +1179,74 @@ function openEntityInspector(o) {
   ensureEntityMeta(o);
   selectedEntityId = o.id;
 
-  entityIdLine.textContent =
-    `id: ${o.id} | type: ${o.type}${o.kind ? " | kind: " + o.kind : ""}`;
+  const entityIdLine = document.getElementById("entityIdLine");
+  const entityTitleInput = document.getElementById("entityTitleInput");
+  const entityBioInput = document.getElementById("entityBioInput");
+  const entityZOrderInput = document.getElementById("entityZOrderInput");
+  const entityPanelEl = document.getElementById("entityPanel");
 
-  entityTitleInput.value = o.meta.title || getDefaultEntityTitle(o);
-  entityBioInput.value = o.meta.bio || "";
+  if (entityIdLine) {
+    entityIdLine.textContent =
+      `id: ${o.id} | type: ${o.type}${o.kind ? " | kind: " + o.kind : ""}`;
+  }
+
+  if (entityTitleInput) entityTitleInput.value = o.meta.title || getDefaultEntityTitle(o);
+  if (entityBioInput) entityBioInput.value = o.meta.bio || "";
+  
+  // Get z from meta.z or fall back to z property
+  const zValue = (o.meta && typeof o.meta.z === "number") ? o.meta.z : (typeof o.z === "number" ? o.z : 0);
+  if (entityZOrderInput) entityZOrderInput.value = zValue;
 
   renderEntityActions(o);
 
   // ✅ Only allow editing TILE title/bio when editor mode is ON
+  // Exception: billboards can always be edited
   const isTile = (o.type === "tile");
-  const canEdit = !(isTile && !editorMode);
+  const isBillboard = (o.kind === 'billboard');
+  const canEdit = isBillboard || !(isTile && !editorMode);
   setEntityInspectorEditable(canEdit);
 
   // Optional: make it obvious why it's locked
-  if (!canEdit) {
+  if (!canEdit && entityIdLine) {
     entityIdLine.textContent += "  |  (read-only: enable Editor to edit tile text)";
   }
 
-  entityPanelEl.style.display = "block";
+  // Render Abilities (spawn unit button for town centers, etc.)
+  const abilitiesEl = document.getElementById("entity-abilities-list");
+  if (abilitiesEl) {
+    abilitiesEl.innerHTML = "";
+    
+    // Only town_center entities have spawn ability
+    const isTownCenter = (o.kind === "town_center" || (o.meta && o.meta.kind === "town_center"));
+    if (isTownCenter) {
+      const btn = document.createElement("button");
+      btn.textContent = "Spawn Unit (cost: 1 green)";
+      btn.style.height = "30px";
+      
+      // disable for players who don't own this town center or lack green resources
+      const owned = (o.owner && o.owner === mySid);
+      const hasGreen = (window.resourceCounts && (window.resourceCounts.green || 0) >= 1);
+      btn.disabled = !owned || !hasGreen;
+      
+      if (!owned) {
+        btn.title = "You do not own this building";
+        btn.style.opacity = "0.5";
+      } else if (!hasGreen) {
+        btn.title = "Requires 1 green resource to spawn";
+        btn.style.opacity = "0.5";
+      }
+      
+      btn.onclick = () => {
+        if (!o || !o.id) return;
+        if (!owned) return; // double-check on click
+        socket.emit("spawn_unit_from_entity", { entityId: o.id });
+      };
+      
+      abilitiesEl.appendChild(btn);
+    }
+  }
+
+  if (entityPanelEl) entityPanelEl.style.display = "block";
 }
 
 function renderEntityActions(o) {

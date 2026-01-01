@@ -15,6 +15,10 @@ map_lock = Lock()
 mine_loop_started = False
 mine_loop_lock = Lock()
 
+# NPC background task guard
+npc_loop_started = False
+npc_loop_lock = Lock()
+
 # Cost constants
 TOWN_CENTER_COST = 5
 
@@ -44,6 +48,12 @@ def load_map():
             map_objects = json.load(f)
     else:
         map_objects = []
+    
+    # Spawn spiders if none exist
+    spider_count = sum(1 for o in map_objects if o.get("kind") == "spider")
+    if spider_count == 0:
+        print("[INIT] Spawning spiders...", flush=True)
+        spawn_spiders()
     
     # Reset nextTick for any mines that were loaded from file
     # (their old nextTick is likely in the past)
@@ -76,8 +86,8 @@ def load_map():
     # Ensure entities that need HP bars have them set
     for o in map_objects:
         if o.get("meta", {}).get("entity"):
-            # town_center, building, and mine all need HP bars
-            if o.get("kind") in ("town_center", "building", "mine", "blacksmith"):
+            # town_center, building, mine, blacksmith, and spider all need HP bars
+            if o.get("kind") in ("town_center", "building", "mine", "blacksmith", "spider"):
                 if o.get("hp") is None:
                     # default HP by kind
                     if o.get("kind") == "town_center":
@@ -86,6 +96,9 @@ def load_map():
                         o["hp"] = 300
                     elif o.get("kind") == "blacksmith":
                         o["hp"] = 300
+                    elif o.get("kind") == "spider":
+                        o["hp"] = 50
+                        o["maxHp"] = 50
                     else:
                         o["hp"] = 200
             else:
@@ -123,6 +136,109 @@ def save_map():
         json.dump(map_objects, f, ensure_ascii=False, indent=2)
     os.replace(tmp, MAP_FILE)
 
+def spawn_spiders():
+    """Spawn spiders around the map with health and waypoints."""
+    
+    def point_in_collision(x, y):
+        """Check if a point is inside any entity's collision box."""
+        for obj in map_objects:
+            meta = obj.get("meta", {})
+            
+            # Skip if no collision enabled
+            if not meta.get("collides"):
+                continue
+            
+            # Get collision box dimensions
+            obj_x = obj.get("x", 0)
+            obj_y = obj.get("y", 0)
+            cx = obj_x + meta.get("cx", 0)
+            cy = obj_y + meta.get("cy", 0)
+            cw = meta.get("cw", 0)
+            ch = meta.get("ch", 0)
+            
+            # Skip if collision box has no size
+            if cw <= 0 or ch <= 0:
+                continue
+            
+            # Check if point is inside collision box (with padding)
+            padding = 80  # Extra space around collision
+            half_w = cw / 2 + padding
+            half_h = ch / 2 + padding
+            
+            if abs(x - cx) < half_w and abs(y - cy) < half_h:
+                return True
+        return False
+    
+    def generate_valid_waypoint(center_x, center_y, min_radius, max_radius, max_attempts=50):
+        """Generate a waypoint that doesn't collide with entities."""
+        for attempt in range(max_attempts):
+            angle = random.random() * math.pi * 2
+            radius = random.randint(min_radius, max_radius)
+            x = center_x + math.cos(angle) * radius
+            y = center_y + math.sin(angle) * radius
+            
+            if not point_in_collision(x, y):
+                return {"x": x, "y": y}
+        
+        # Fallback: try wider radius
+        for attempt in range(20):
+            angle = random.random() * math.pi * 2
+            radius = random.randint(max_radius, max_radius + 200)
+            x = center_x + math.cos(angle) * radius
+            y = center_y + math.sin(angle) * radius
+            
+            if not point_in_collision(x, y):
+                return {"x": x, "y": y}
+        
+        # Last resort: return position far from center
+        print(f"[SPIDER] Warning: Could not find collision-free waypoint after {max_attempts + 20} attempts", flush=True)
+        return {"x": center_x + random.randint(-500, 500), "y": center_y + random.randint(-500, 500)}
+    
+    # Match resource grid area: 69 cols x 53 rows x 180 spacing
+    # Resources span from roughly -6200 to +6200 in x, -4770 to +4770 in y
+    spider_count = 100
+    print(f"[SPIDER] Spawning {spider_count} spiders, checking collisions with {len(map_objects)} entities", flush=True)
+    
+    for i in range(spider_count):
+        # Spawn randomly within resource area
+        center_x = random.randint(-6000, 6000)
+        center_y = random.randint(-4500, 4500)
+        
+        # Create waypoints in a random walk pattern, avoiding collisions
+        waypoints = []
+        wp_count = random.randint(3, 6)
+        for j in range(wp_count):
+            wp = generate_valid_waypoint(center_x, center_y, 150, 400)
+            waypoints.append(wp)
+            print(f"[SPIDER] Spider {i+1} waypoint {j+1}: ({wp['x']:.1f}, {wp['y']:.1f})", flush=True)
+        
+        spider = {
+            "id": str(uuid.uuid4()),
+            "type": "tile",
+            "kind": "spider",
+            "x": waypoints[0]["x"],
+            "y": waypoints[0]["y"],
+            "owner": None,  # Hostile entity with no owner
+            "hp": 50,
+            "maxHp": 50,
+            "meta": {
+                "title": f"Spider {i + 1}",
+                "w": 100,
+                "h": 100,
+                "waypoints": waypoints,
+                "currentWaypointIndex": 0,
+                "anim": "walk",
+                "dir": "000",
+                "z": 0,
+                "entity": True
+            }
+        }
+        map_objects.append(spider)
+        print(f"[SPIDER] Created spider {i+1} with hp={spider.get('hp')}, owner={spider.get('owner')}", flush=True)
+    
+    save_map()
+    print(f"[INIT] Spawned {spider_count} spiders", flush=True)
+
 def save_ground():
     tmp = GROUND_FILE + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -139,6 +255,16 @@ def ensure_mine_loop_started():
         socketio.start_background_task(mine_production_loop)
         mine_loop_started = True
         print("[MINE_LOOP] Background task started", flush=True)
+
+def ensure_npc_loop_started():
+    """Start the NPC movement loop exactly once."""
+    global npc_loop_started
+    with npc_loop_lock:
+        if npc_loop_started:
+            return
+        socketio.start_background_task(npc_movement_loop)
+        npc_loop_started = True
+        print("[NPC_LOOP] Background task started", flush=True)
 
 load_map()
 load_resources()
@@ -413,7 +539,8 @@ def place_map_object(data):
             "y": float(data.get("y", 0)),
             "meta": data.get("meta") or {},
             # owner: prefer client-provided, otherwise server-assign to the creator
-            "owner": data.get("owner") or pid,
+            # Spiders are hostile (no owner) so they can be attacked by all players
+            "owner": None if data.get("kind") == "spider" else (data.get("owner") or pid),
             # optional itemSlots for persistent entity items
             "itemSlots": data.get("itemSlots") or []
         }
@@ -439,7 +566,7 @@ def place_map_object(data):
             if not obj.get("itemSlots"):
                 obj["itemSlots"] = [None]
         # If this is a building entity, ensure it has HP; other entities are invulnerable by default
-        if obj.get("meta", {}).get("entity") and (obj.get("type") == "building" or obj.get("kind") in ["town_center", "mine", "blacksmith"]):
+        if obj.get("meta", {}).get("entity") and (obj.get("type") == "building" or obj.get("kind") in ["town_center", "mine", "blacksmith", "spider"]):
             if data.get("hp") is not None:
                 obj["hp"] = float(data.get("hp"))
             else:
@@ -449,6 +576,10 @@ def place_map_object(data):
                     obj["hp"] = 300
                 elif obj.get("kind") == "blacksmith":
                     obj["hp"] = 300
+                elif obj.get("kind") == "spider":
+                    # Promote meta.hp to top level if present
+                    obj["hp"] = float(obj.get("meta", {}).get("hp", 50))
+                    obj["maxHp"] = float(obj.get("meta", {}).get("maxHp", 50))
                 else:
                     obj["hp"] = 200
         map_objects.append(obj)
@@ -467,10 +598,13 @@ def update_map_object(data):
     if not pid:
         return
 
+    print(f"[UPDATE_MAP_OBJECT] id={oid}, meta keys={list(meta.keys())}, itemSlots={itemSlots is not None}", flush=True)
+
     with map_lock:
         changed = False
         for o in map_objects:
             if o.get("id") == oid:
+                print(f"[UPDATE_MAP_OBJECT] Found object, type={o.get('type')}, kind={o.get('kind')}", flush=True)
                 # Only the owner may change a mine's resource type
                 try:
                     new_mine_resource = meta.get("mine", {}).get("resource")
@@ -480,9 +614,15 @@ def update_map_object(data):
                     socketio.emit("server_debug", {"msg": "update_map_object: only the owner can change mine resource"}, to=request.sid)
                     break
                 o["meta"] = {**(o.get("meta") or {}), **meta}  # merge
+                print(f"[UPDATE_MAP_OBJECT] Meta after merge: {o['meta']}", flush=True)
                 # update persistent itemSlots if provided
                 if itemSlots is not None:
                     o["itemSlots"] = itemSlots
+                # update position if provided
+                if data.get("x") is not None:
+                    o["x"] = float(data.get("x"))
+                if data.get("y") is not None:
+                    o["y"] = float(data.get("y"))
                 # keep hp if provided, but only for building-type entities or town_center kind
                 if data.get("hp") is not None and (o.get("type") == "building" or o.get("kind") == "town_center"):
                     try:
@@ -492,7 +632,10 @@ def update_map_object(data):
                 changed = True
                 break
         if changed:
+            print(f"[UPDATE_MAP_OBJECT] Saving map", flush=True)
             save_map()
+        else:
+            print(f"[UPDATE_MAP_OBJECT] No object found with id={oid}", flush=True)
 
     socketio.emit("map_objects", map_objects)
 
@@ -530,6 +673,7 @@ def delete_ground_item(data):
 def on_connect():
     sid = request.sid
     ensure_mine_loop_started()
+    ensure_npc_loop_started()
     socketio.emit("login_required", {}, to=sid)
 
 
@@ -537,6 +681,7 @@ def on_connect():
 def on_login(data):
     sid = request.sid
     ensure_mine_loop_started()
+    ensure_npc_loop_started()
     username = str((data or {}).get("username", "")).strip()
     if not username:
         socketio.emit("login_error", {"msg": "Username required"}, to=sid)
@@ -1501,7 +1646,181 @@ def mine_production_loop():
         if changed:
             emit_state()
 
+def npc_movement_loop():
+    """Background task that moves NPCs along their waypoint paths."""
+    NPC_SPEED = 1.0  # pixels per tick (reduced for slower walk)
+    SPIDER_ATTACK_RANGE = 200  # pixels
+    SPIDER_RETURN_RANGE = 400  # pixels - return to waypoints if target is this far
+    tick_count = 0
+    
+    def check_collision(x, y, entity_id):
+        """Check if position collides with any entity."""
+        for obj in map_objects:
+            if obj.get("id") == entity_id:
+                continue  # Skip self
+            if not obj.get("meta", {}).get("collides"):
+                continue
+            
+            # Get collision box dimensions
+            cx = obj.get("x", 0) + obj.get("meta", {}).get("cx", 0)
+            cy = obj.get("y", 0) + obj.get("meta", {}).get("cy", 0)
+            cw = obj.get("meta", {}).get("cw", 0)
+            ch = obj.get("meta", {}).get("ch", 0)
+            
+            # Check if position is inside collision box
+            if (abs(x - cx) < cw/2 + 20 and 
+                abs(y - cy) < ch/2 + 20):
+                return True
+        return False
+    
+    while True:
+        socketio.sleep(0.016)  # ~60 FPS
+        tick_count += 1
+        
+        with map_lock:
+            changed = False
+            npc_count = 0
+            for o in map_objects:
+                # Support both 'npc' and 'spider' kinds
+                if o.get("kind") not in ["npc", "spider"]:
+                    continue
+                
+                npc_count += 1
+                m = o.get("meta", {})
+                waypoints = m.get("waypoints", [])
+                if len(waypoints) < 2:
+                    if tick_count % 600 == 0:  # Log every 10 seconds
+                        print(f"[NPC_LOOP] NPC {o.get('id')[:8]} has insufficient waypoints ({len(waypoints)})", flush=True)
+                    continue
+                
+                # Spider AI: attack nearby players
+                is_spider = (o.get("kind") == "spider")
+                target_player = None
+                
+                if is_spider:
+                    # Find nearest player unit
+                    nearest_dist = SPIDER_ATTACK_RANGE
+                    for sid, p in players.items():
+                        for unit in p.get("units", []):
+                            if unit.get("hp", 0) <= 0:
+                                continue
+                            dist = math.hypot(unit["x"] - o["x"], unit["y"] - o["y"])
+                            if dist < nearest_dist:
+                                nearest_dist = dist
+                                target_player = {"sid": sid, "unit": unit, "dist": dist}
+                    
+                    # Check if current target is too far (return to waypoints)
+                    if target_player and m.get("chasing"):
+                        if target_player["dist"] > SPIDER_RETURN_RANGE:
+                            target_player = None
+                            m["chasing"] = False
+                
+                # If spider has a target, chase and attack
+                if is_spider and target_player:
+                    m["chasing"] = True
+                    tx = target_player["unit"]["x"]
+                    ty = target_player["unit"]["y"]
+                    
+                    dx = tx - o["x"]
+                    dy = ty - o["y"]
+                    dist = math.hypot(dx, dy)
+                    
+                    # Move towards player
+                    if dist > 30:  # Stop when close enough
+                        new_x = o["x"] + (dx / dist) * NPC_SPEED
+                        new_y = o["y"] + (dy / dist) * NPC_SPEED
+                        
+                        # Only move if not colliding
+                        if not check_collision(new_x, new_y, o.get("id")):
+                            o["x"] = new_x
+                            o["y"] = new_y
+                            changed = True
+                    
+                    # Update direction
+                    if dist > 0.1:
+                        angle_deg = (math.degrees(math.atan2(dy, dx)) + 90) % 360
+                        directions = [0, 22, 45, 67, 90, 112, 135, 157, 180, 202, 225, 247, 270, 292, 315, 337]
+                        closest_dir = min(directions, key=lambda d: min(abs(angle_deg - d), abs(angle_deg - d + 360), abs(angle_deg - d - 360)))
+                        m["dir"] = str(closest_dir).zfill(3)
+                        m["anim"] = "walk"
+                else:
+                    # Follow waypoints (default behavior for NPCs and spiders without targets)
+                    m["chasing"] = False
+                    current_idx = m.get("currentWaypointIndex", 0)
+                    if current_idx >= len(waypoints):
+                        current_idx = 0
+                        m["currentWaypointIndex"] = current_idx
+                    
+                    target_wp = waypoints[current_idx]
+                    tx, ty = target_wp["x"], target_wp["y"]
+                    
+                    # Move towards target
+                    dx = tx - o["x"]
+                    dy = ty - o["y"]
+                    dist = math.hypot(dx, dy)
+                    
+                    if dist < NPC_SPEED:
+                        # Reached waypoint, move to next
+                        o["x"] = tx
+                        o["y"] = ty
+                        m["currentWaypointIndex"] = (current_idx + 1) % len(waypoints)
+                        changed = True
+                    else:
+                        # Move towards waypoint with collision checking
+                        new_x = o["x"] + (dx / dist) * NPC_SPEED
+                        new_y = o["y"] + (dy / dist) * NPC_SPEED
+                        
+                        # Only move if not colliding
+                        if not check_collision(new_x, new_y, o.get("id")):
+                            o["x"] = new_x
+                            o["y"] = new_y
+                            changed = True
+                        else:
+                            # Try to slide around obstacle
+                            # Try moving only in X direction
+                            if not check_collision(new_x, o["y"], o.get("id")):
+                                o["x"] = new_x
+                                changed = True
+                            # Try moving only in Y direction
+                            elif not check_collision(o["x"], new_y, o.get("id")):
+                                o["y"] = new_y
+                                changed = True
+                    
+                    # Update direction for animation (match client getDirKey logic)
+                    if dist > 0.1:
+                        # Match client: atan2(dy, dx) * 180/PI + 90
+                        angle_deg = (math.degrees(math.atan2(dy, dx)) + 90) % 360
+                        # Snap to nearest direction (16 directions)
+                        directions = [0, 22, 45, 67, 90, 112, 135, 157, 180, 202, 225, 247, 270, 292, 315, 337]
+                        closest_dir = min(directions, key=lambda d: min(abs(angle_deg - d), abs(angle_deg - d + 360), abs(angle_deg - d - 360)))
+                        m["dir"] = str(closest_dir).zfill(3)
+                        m["anim"] = "walk"
+                    else:
+                        m["anim"] = "idle"
+            
+            # Log NPC count periodically
+            if tick_count % 600 == 0 and npc_count > 0:  # Every 10 seconds
+                print(f"[NPC_LOOP] Tick {tick_count}: {npc_count} NPCs active", flush=True)
+            
+            if changed:
+                # Save periodically (every 60 ticks / 1 second)
+                if not hasattr(npc_movement_loop, '_tick_counter'):
+                    npc_movement_loop._tick_counter = 0
+                npc_movement_loop._tick_counter += 1
+                
+                if npc_movement_loop._tick_counter % 60 == 0:
+                    save_map()
+        
+        if changed:
+            # Debug: check if spider has hp before emitting
+            for o in map_objects:
+                if o.get("kind") == "spider":
+                    print(f"[NPC_LOOP] Emitting spider {o.get('id')[:8]} hp={o.get('hp')} maxHp={o.get('maxHp')}", flush=True)
+                    break
+            socketio.emit("map_objects", map_objects)
+
 # Run server
 if __name__ == "__main__":
     ensure_mine_loop_started()
+    ensure_npc_loop_started()
     socketio.run(app, host="0.0.0.0", port=8080)
