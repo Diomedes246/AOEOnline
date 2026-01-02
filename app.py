@@ -234,7 +234,6 @@ def spawn_spiders():
             }
         }
         map_objects.append(spider)
-        print(f"[SPIDER] Created spider {i+1} with hp={spider.get('hp')}, owner={spider.get('owner')}", flush=True)
     
     save_map()
     print(f"[INIT] Spawned {spider_count} spiders", flush=True)
@@ -1688,7 +1687,7 @@ def npc_movement_loop():
                 npc_count += 1
                 m = o.get("meta", {})
                 waypoints = m.get("waypoints", [])
-                if len(waypoints) < 2:
+                if len(waypoints) == 0:
                     if tick_count % 600 == 0:  # Log every 10 seconds
                         print(f"[NPC_LOOP] NPC {o.get('id')[:8]} has insufficient waypoints ({len(waypoints)})", flush=True)
                     continue
@@ -1758,6 +1757,23 @@ def npc_movement_loop():
                     dx = tx - o["x"]
                     dy = ty - o["y"]
                     dist = math.hypot(dx, dy)
+
+                    # Single-waypoint NPCs should idle at their spot
+                    if len(waypoints) == 1:
+                        m["currentWaypointIndex"] = 0
+                        if dist < NPC_SPEED:
+                            if o["x"] != tx or o["y"] != ty:
+                                o["x"], o["y"] = tx, ty
+                                changed = True
+                            m["anim"] = "idle"
+                        else:
+                            new_x = o["x"] + (dx / dist) * NPC_SPEED
+                            new_y = o["y"] + (dy / dist) * NPC_SPEED
+                            if not check_collision(new_x, new_y, o.get("id")):
+                                o["x"], o["y"] = new_x, new_y
+                                changed = True
+                            m["anim"] = "walk"
+                        continue
                     
                     if dist < NPC_SPEED:
                         # Reached waypoint, move to next
@@ -1812,11 +1828,6 @@ def npc_movement_loop():
                     save_map()
         
         if changed:
-            # Debug: check if spider has hp before emitting
-            for o in map_objects:
-                if o.get("kind") == "spider":
-                    print(f"[NPC_LOOP] Emitting spider {o.get('id')[:8]} hp={o.get('hp')} maxHp={o.get('maxHp')}", flush=True)
-                    break
             socketio.emit("map_objects", map_objects)
 
 # Run server

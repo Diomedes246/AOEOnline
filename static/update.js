@@ -581,9 +581,16 @@ if (u.targetResource !== null) {
         } else if (now - u.harvesting.startTime >= HARVEST_TIME) {
           // optimistically remove locally; server will broadcast authoritative list
           resources = resources.filter(rr => rr.id !== r.id);
-          // local bookkeeping per-type
+          // local bookkeeping per-type (and advance collect quests immediately)
           const rtype = r.type || 'red';
-          try { window.resourceCounts = window.resourceCounts || { red:0, green:0, blue:0 }; window.resourceCounts[rtype] = (window.resourceCounts[rtype]||0) + 1; } catch(e) {}
+          try {
+            window.resourceCounts = window.resourceCounts || { red:0, green:0, blue:0 };
+            const prevResources = { ...window.resourceCounts };
+            window.resourceCounts[rtype] = (window.resourceCounts[rtype]||0) + 1;
+            if (typeof handleResourceGain === "function") {
+              handleResourceGain(prevResources, window.resourceCounts);
+            }
+          } catch(e) {}
           // inform server of collected resource so server-side accounting is authoritative
           try { socket.emit("collect_resource", { amount: 1, type: rtype, resourceId: r.id, unitId: u.id }); } catch (e) {}
           u.harvesting = null;
@@ -608,7 +615,6 @@ if (!u.manualMove) {
 
   // validate current targetEnemy by unitId
   if (u.targetEnemy) {
-    console.log('[COMBAT] Unit has targetEnemy:', u.targetEnemy.kind, u.targetEnemy.entityId || u.targetEnemy.unitId);
     if (u.targetEnemy.kind === 'unit') {
       const enemyPlayer = players[u.targetEnemy.sid];
       if (!enemyPlayer || !enemyPlayer.units || enemyPlayer.units.length === 0) {
@@ -627,12 +633,7 @@ if (!u.manualMove) {
       }
     } else if (u.targetEnemy.kind === 'entity') {
       const ent = (mapObjects || []).find(m => m.id === u.targetEnemy.entityId);
-      if (ent) {
-        console.log('[VALIDATION] Spider found:', ent.kind, 'Full object:', JSON.stringify({id: ent.id, hp: ent.hp, maxHp: ent.maxHp, owner: ent.owner, kind: ent.kind}));
-      }
-      console.log('[VALIDATION] Entity found:', !!ent, 'hp:', ent?.hp);
       if (!ent || (ent.hp ?? 0) <= 0) {
-        console.log('[VALIDATION] Clearing targetEnemy - entity not found or dead');
         u.targetEnemy = null;
       } else {
         const dx = ent.x - u.x;
@@ -644,9 +645,7 @@ if (!u.manualMove) {
         const ch = (ent.meta && ent.meta.ch) ? ent.meta.ch : (ent.meta && ent.meta.h ? ent.meta.h : BUILD_H);
         const entRadius = Math.max(cw, ch) / 2;
         const effectiveDist = Math.max(0, dist - entRadius);
-        console.log('[VALIDATION] effectiveDist:', effectiveDist, 'AGGRO_LOSE_RADIUS:', AGGRO_LOSE_RADIUS, 'userIssued:', u.targetEnemy.userIssued);
         if (effectiveDist > AGGRO_LOSE_RADIUS && !u.targetEnemy.userIssued) {
-          console.log('[VALIDATION] Clearing targetEnemy - too far and not user issued');
           u.targetEnemy = null;
         }
       }
@@ -661,8 +660,6 @@ if (!u.manualMove) {
       if (dist <= AGGRO_RADIUS) u.targetEnemy = nearest;
     }
   }
-
-  console.log('[COMBAT] After acquire, targetEnemy exists:', !!u.targetEnemy, u.targetEnemy?.kind);
 
   // engage target
     if (u.targetEnemy) {
@@ -705,13 +702,8 @@ if (!u.manualMove) {
           }
         }
       } else if (u.targetEnemy.kind === 'entity') {
-        console.log('[ENTITY_ATTACK] Starting entity attack, entityId:', u.targetEnemy.entityId);
         const ent = (mapObjects || []).find(m => m.id === u.targetEnemy.entityId);
-        if (!ent) {
-          console.log('[ENTITY_ATTACK] Entity not found in mapObjects:', u.targetEnemy.entityId);
-          u.targetEnemy = null;
-        } else if ((ent.hp ?? 0) <= 0) {
-          console.log('[ENTITY_ATTACK] Entity dead:', ent.kind, ent.hp);
+        if (!ent || (ent.hp ?? 0) <= 0) {
           u.targetEnemy = null;
         } else {
           // If an attackPoint was provided (from right-click), use it as approach target
@@ -739,7 +731,6 @@ if (!u.manualMove) {
 
           // If effective distance is greater than attack range, approach the attackPoint (or center). Otherwise attack.
           if (effectiveDist > UNIT_ATTACK_RANGE) {
-            console.log('[ENTITY_ATTACK] Moving to entity:', ent.kind, 'dist:', effectiveDist.toFixed(1), 'attackRange:', UNIT_ATTACK_RANGE);
             const moveSpeed = CHASE_SPEED * dtScale;
             const approach = Math.max(0, effectiveDist - UNIT_ATTACK_RANGE);
             const step = Math.min(moveSpeed, approach);
@@ -757,7 +748,6 @@ if (!u.manualMove) {
             u.anim = "walk";
             u.dir = getDirKey(dx, dy);
           } else {
-            console.log('[ENTITY_ATTACK] In range! Attacking:', ent.kind, 'hp:', ent.hp);
             u.anim = "attack";
             if (u.attackCooldown >= ATTACK_COOLDOWN) {
               const dmgPerTick = ((stats?.dps ?? UNIT_ATTACK_DPS) / 60) * dtScale;

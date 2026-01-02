@@ -178,7 +178,6 @@ canvas.addEventListener("mousemove", e=>{
     else { const def = TILE_DEFS[o.kind] || { w: 256, h: 256 }; w = o.meta?.w ?? def.w; h = o.meta?.h ?? def.h; }
 
     if (Math.abs(wx - o.x) < w/2 && Math.abs(wy - o.y) < h/2) {
-      if (o.kind === 'spider') console.log('[HOVER] Spider detected:', o.id, 'owner:', o.owner, 'w:', w, 'h:', h);
       hoveredAttackEntity = o;
       canvas.style.cursor = 'crosshair';
       return;
@@ -388,8 +387,8 @@ canvas.addEventListener("mousedown", e => {
         const wp = npc.meta.waypoints[i];
         const dist = Math.hypot(wx - wp.x, wy - wp.y);
         if (dist < 40) {
-          // Ensure at least 2 waypoints remain
-          if (npc.meta.waypoints.length > 2) {
+          // Allow down to a single waypoint (idle NPC), block removing the last one
+          if (npc.meta.waypoints.length > 1) {
             npc.meta.waypoints.splice(i, 1);
             
             // Update server
@@ -976,7 +975,6 @@ canvas.addEventListener("mouseup", e=>{
         }
 
         const selectedUnits = myUnits.filter(u => u.selected);
-        console.log('[RIGHT_CLICK] Selected units:', selectedUnits.length);
         const moveMarkers = [];
 
         // Helper: find a map entity at world coords (point-in-rect using meta collision or size)
@@ -995,12 +993,8 @@ canvas.addEventListener("mouseup", e=>{
             const right = o.x + w/2;
             const top = o.y - h/2;
             const bottom = o.y + h/2;
-            if (wx >= left && wx <= right && wy >= top && wy <= bottom) {
-              console.log('[findEntityAt] Found entity:', o.kind, 'at', wx, wy, 'bounds:', {left, right, top, bottom});
-              return o;
-            }
+            if (wx >= left && wx <= right && wy >= top && wy <= bottom) return o;
           }
-          console.log('[findEntityAt] No entity found at', wx, wy);
           return null;
         }
 
@@ -1032,15 +1026,9 @@ canvas.addEventListener("mouseup", e=>{
         }
 
         let clickedEntity = findEntityAt(wx, wy);
-        console.log('[RIGHT_CLICK] hoveredAttackEntity:', hoveredAttackEntity?.kind, hoveredAttackEntity?.id);
         // If hit-test fails but we have an attack-hovered entity, use it as the clicked entity.
         if (!clickedEntity && typeof hoveredAttackEntity !== 'undefined' && hoveredAttackEntity) {
           clickedEntity = hoveredAttackEntity;
-          console.log('[RIGHT_CLICK] Using hoveredAttackEntity:', clickedEntity.kind);
-        }
-        
-        if (clickedEntity) {
-          console.log('[RIGHT_CLICK] clickedEntity:', clickedEntity.kind, 'owner:', clickedEntity.owner, 'mySid:', mySid);
         }
 
         // Assign a stable formation index and total so units keep their relative positions
@@ -1053,10 +1041,7 @@ canvas.addEventListener("mouseup", e=>{
 
           // If clicking an enemy entity, set unit to attack that entity instead of moving to its center
           // Allow attacking entities with no owner (hostile entities like spiders)
-          const canAttack = clickedEntity && (!clickedEntity.owner || clickedEntity.owner !== mySid);
-          console.log('[ATTACK_CHECK] clickedEntity:', clickedEntity?.kind, 'owner:', clickedEntity?.owner, 'mySid:', mySid, 'canAttack:', canAttack);
-          if (canAttack) {
-            console.log('[ATTACK] Setting targetEnemy for unit', u.id, 'to attack entity', clickedEntity.kind, clickedEntity.id);
+          if (clickedEntity && (!clickedEntity.owner || clickedEntity.owner !== mySid)) {
             // spread attackers around the entity so they do not stack
             const cw = (clickedEntity.meta && clickedEntity.meta.cw) ? clickedEntity.meta.cw : (clickedEntity.meta && clickedEntity.meta.w ? clickedEntity.meta.w : BUILD_W);
             const ch = (clickedEntity.meta && clickedEntity.meta.ch) ? clickedEntity.meta.ch : (clickedEntity.meta && clickedEntity.meta.h ? clickedEntity.meta.h : BUILD_H);
@@ -1077,7 +1062,6 @@ canvas.addEventListener("mouseup", e=>{
               userIssued: true // keep attack order even when far away
             };
             u.manualMove = false;
-            console.log('[ATTACK] targetEnemy set, manualMove:', u.manualMove, 'targetEnemy:', u.targetEnemy);
           } else if (clickedResource) {
             // ✅ resource gather command
             u.targetResource = clickedResource.id;

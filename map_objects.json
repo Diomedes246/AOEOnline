@@ -3,8 +3,8 @@
     "id": "ec611c24-e4cd-4712-bdbe-24e47b03190d",
     "type": "tile",
     "kind": "spider",
-    "x": -5151.033543819338,
-    "y": -127.14034999808437,
+    "x": -4729.039039777846,
+    "y": -113.75518696216892,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -38,9 +38,9 @@
           "y": -120.1838908210758
         }
       ],
-      "currentWaypointIndex": 3,
+      "currentWaypointIndex": 0,
       "anim": "walk",
-      "dir": "202",
+      "dir": "270",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -50,8 +50,8 @@
     "id": "7c96dda9-7a00-41d1-a371-185cdd2a54c0",
     "type": "tile",
     "kind": "spider",
-    "x": 4286.137847060592,
-    "y": 3266.5717363097224,
+    "x": 4429.762862302855,
+    "y": 3466.2911770175074,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -97,8 +97,8 @@
     "id": "ef7701d8-eae4-4869-949a-6cc1c727c865",
     "type": "tile",
     "kind": "spider",
-    "x": -5596.900829571881,
-    "y": -2480.4206891802182,
+    "x": -5636.273981696697,
+    "y": -2666.2963328018845,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -132,8 +132,8 @@
     "id": "2d387765-4c0a-41f7-9d5e-86b22123249a",
     "type": "tile",
     "kind": "spider",
-    "x": -4088.693809171204,
-    "y": -501.06461672660294,
+    "x": -3970.688874547341,
+    "y": -625.4641402422442,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -163,9 +163,9 @@
           "y": -618.1133318699806
         }
       ],
-      "currentWaypointIndex": 3,
+      "currentWaypointIndex": 0,
       "anim": "walk",
-      "dir": "292",
+      "dir": "270",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -175,8 +175,8 @@
     "id": "8885b6e6-bce3-480b-98cd-804f8c2ec9f2",
     "type": "tile",
     "kind": "spider",
-    "x": 2150.9953468366457,
-    "y": -1011.4519798294403,
+    "x": 2280.3845195406548,
+    "y": -759.3020397160982,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -202,9 +202,9 @@
           "y": -1093.4005174055662
         }
       ],
-      "currentWaypointIndex": 0,
+      "currentWaypointIndex": 3,
       "anim": "walk",
-      "dir": "180",
+      "dir": "337",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -214,8 +214,8 @@
     "id": "6cc7c36c-e584-49af-ae7b-bdc6f5d1af34",
     "type": "tile",
     "kind": "spider",
-    "x": 1407.8151935911774,
-    "y": -2377.2665923997915,
+    "x": 1115.1079515869762,
+    "y": -2583.3855464309045,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -245,7 +245,7 @@
           "y": -2072.254571749241
         }
       ],
-      "currentWaypointIndex": 2,
+      "currentWaypointIndex": 0,
       "anim": "walk",
       "dir": "337",
       "z": 0,
@@ -257,8 +257,8 @@
     "id": "ba363d32-efac-47ea-83e2-86d904052a6b",
     "type": "tile",
     "kind": "spider",
-    "x": -3968.790352582044,
-    "y": 2314.084181827454,
+    "x": -3665.2326414560184,
+    "y": 2604.3473658793546,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -300,8 +300,8 @@
     "id": "41f75bb9-63a1-4fc8-b176-458ea5dfb09b",
     "type": "tile",
     "kind": "spider",
-    "x": 3473.537030879173,
-    "y": -1040.2979559295259,
+    "x": 3514.5930017150736,
+    "y": -988.6219725453541,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -339,8 +339,8 @@
     "id": "dfe7b2fd-0396-4850-8c7e-7da256cc9e53",
     "type": "tile",
     "kind": "spider",
-    "x": -407.7185608574691,
-    "y": 1426.7118431123886,
+    "x": -172.22183997978328,
+    "y": 1700.8414843545145,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -366,9 +366,9 @@
           "y": 1747.2671925384016
         }
       ],
-      "currentWaypointIndex": 3,
+      "currentWaypointIndex": 1,
       "anim": "walk",
-      "dir": "157",
+      "dir": "202",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -378,8 +378,8 @@
     "id": "f740d14a-af46-4ca5-ac22-a541816a0955",
     "type": "tile",
     "kind": "spider",
-    "x": -5591.617585531554,
-    "y": -1434.4324210646785,
+    "x": -5579.497350165108,
+    "y": -1457.5302512405362,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -401,9 +401,9 @@
           "y": -1307.5966340402276
         }
       ],
-      "currentWaypointIndex": 1,
+      "currentWaypointIndex": 0,
       "anim": "walk",
-      "dir": "202",
+      "dir": "022",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -413,8 +413,8 @@
     "id": "917cf3f6-495a-4f7b-a35b-80777356476f",
     "type": "tile",
     "kind": "spider",
-    "x": -475.01784764245554,
-    "y": -1657.6893944038673,
+    "x": -444.0268903114369,
+    "y": -1565.7758279787317,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -436,9 +436,9 @@
           "y": -1615.1991044953043
         }
       ],
-      "currentWaypointIndex": 2,
+      "currentWaypointIndex": 0,
       "anim": "walk",
-      "dir": "112",
+      "dir": "247",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -448,8 +448,8 @@
     "id": "ba264292-7810-4d0c-8ad6-040b4f082ec6",
     "type": "tile",
     "kind": "spider",
-    "x": 404.4144103127028,
-    "y": -1775.565914344998,
+    "x": 149.49840479442537,
+    "y": -1633.1516238731288,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -483,8 +483,8 @@
     "id": "4f07780d-cae5-45f7-8649-9d632c6e4039",
     "type": "tile",
     "kind": "spider",
-    "x": -4816.486078670194,
-    "y": 4135.972652236954,
+    "x": -5066.784729072746,
+    "y": 4156.759957481625,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -510,9 +510,9 @@
           "y": 4130.928446865285
         }
       ],
-      "currentWaypointIndex": 0,
+      "currentWaypointIndex": 3,
       "anim": "walk",
-      "dir": "112",
+      "dir": "090",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -522,8 +522,8 @@
     "id": "25ddb579-8f0e-4131-8bf4-6d68e7d01790",
     "type": "tile",
     "kind": "spider",
-    "x": -2189.96960480617,
-    "y": -2234.302722841589,
+    "x": -2183.3102732692532,
+    "y": -2344.5846599092183,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -549,9 +549,9 @@
           "y": -2388.182228194398
         }
       ],
-      "currentWaypointIndex": 0,
+      "currentWaypointIndex": 1,
       "anim": "walk",
-      "dir": "180",
+      "dir": "000",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -561,8 +561,8 @@
     "id": "c6970e39-cd05-4e9a-b317-dd82373f5aa8",
     "type": "tile",
     "kind": "spider",
-    "x": 1831.3714294883123,
-    "y": 2971.939690312669,
+    "x": 1705.3436905467236,
+    "y": 2838.836026322097,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -588,9 +588,9 @@
           "y": 2774.6863474605807
         }
       ],
-      "currentWaypointIndex": 1,
+      "currentWaypointIndex": 0,
       "anim": "walk",
-      "dir": "112",
+      "dir": "202",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -600,8 +600,8 @@
     "id": "07d4ef07-03bb-4f21-b078-aa8a334e6f2c",
     "type": "tile",
     "kind": "spider",
-    "x": -3479.028053632703,
-    "y": 1098.14692016663,
+    "x": -3418.040970597144,
+    "y": 1141.799820446181,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -647,8 +647,8 @@
     "id": "8ee8ea40-a323-498e-a610-73497e08394b",
     "type": "tile",
     "kind": "spider",
-    "x": 2915.2973328619564,
-    "y": -3533.4539930102746,
+    "x": 2671.4862959531574,
+    "y": -3429.098355911787,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -678,9 +678,9 @@
           "y": -3514.788465175503
         }
       ],
-      "currentWaypointIndex": 0,
+      "currentWaypointIndex": 2,
       "anim": "walk",
-      "dir": "090",
+      "dir": "315",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -690,8 +690,8 @@
     "id": "d71ae3a0-694b-49bb-a2be-40af06254c7c",
     "type": "tile",
     "kind": "spider",
-    "x": -5784.017485676107,
-    "y": 489.5761425164161,
+    "x": -6076.36707951011,
+    "y": 346.6251957516978,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -725,9 +725,9 @@
           "y": 455.56291433848133
         }
       ],
-      "currentWaypointIndex": 1,
+      "currentWaypointIndex": 4,
       "anim": "walk",
-      "dir": "090",
+      "dir": "225",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -737,8 +737,8 @@
     "id": "5371868b-474d-4f6c-867a-d0395402e643",
     "type": "tile",
     "kind": "spider",
-    "x": 875.7553204614001,
-    "y": 3053.617011484256,
+    "x": 849.1245184682539,
+    "y": 3088.40265645129,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -760,9 +760,9 @@
           "y": 3050.753263683577
         }
       ],
-      "currentWaypointIndex": 0,
+      "currentWaypointIndex": 1,
       "anim": "walk",
-      "dir": "090",
+      "dir": "270",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -772,8 +772,8 @@
     "id": "06e61209-d12b-45e2-97b9-8e5a673c2014",
     "type": "tile",
     "kind": "spider",
-    "x": 1691.0437888790718,
-    "y": -3901.17414242104,
+    "x": 1768.2387037483331,
+    "y": -3799.4723867908656,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -795,9 +795,9 @@
           "y": -3982.3108459076766
         }
       ],
-      "currentWaypointIndex": 2,
+      "currentWaypointIndex": 0,
       "anim": "walk",
-      "dir": "090",
+      "dir": "247",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -807,8 +807,8 @@
     "id": "3e5a6f3b-b627-41b6-9b9b-06eee7e3db12",
     "type": "tile",
     "kind": "spider",
-    "x": -23.852517615210846,
-    "y": 1566.1430800035976,
+    "x": -19.24991731570094,
+    "y": 1495.6090637550644,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -830,9 +830,9 @@
           "y": 1670.9895221350355
         }
       ],
-      "currentWaypointIndex": 2,
+      "currentWaypointIndex": 1,
       "anim": "walk",
-      "dir": "180",
+      "dir": "225",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -842,8 +842,8 @@
     "id": "ce8180ca-9a77-45a1-adea-f17c770fa950",
     "type": "tile",
     "kind": "spider",
-    "x": 2268.577384515495,
-    "y": -1310.848524859847,
+    "x": 2548.3322470665935,
+    "y": -1485.6265228936488,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -869,9 +869,9 @@
           "y": -1484.615485668502
         }
       ],
-      "currentWaypointIndex": 2,
+      "currentWaypointIndex": 3,
       "anim": "walk",
-      "dir": "315",
+      "dir": "112",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -881,8 +881,8 @@
     "id": "f616a208-687e-48e5-811c-0d7548291f84",
     "type": "tile",
     "kind": "spider",
-    "x": -4836.792624573973,
-    "y": 480.6453555793239,
+    "x": -5053.121705826522,
+    "y": 353.9057785346658,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -916,9 +916,9 @@
           "y": 507.18014329036123
         }
       ],
-      "currentWaypointIndex": 5,
+      "currentWaypointIndex": 1,
       "anim": "walk",
-      "dir": "090",
+      "dir": "022",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -928,8 +928,8 @@
     "id": "06400c57-eeb9-4fcb-b7ef-b1990aa52144",
     "type": "tile",
     "kind": "spider",
-    "x": 3187.4687648120653,
-    "y": -589.9271963671656,
+    "x": 3002.154109949026,
+    "y": -414.76019407224715,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -971,8 +971,8 @@
     "id": "aabda73d-f78f-4942-b9cc-edd1e60d12c7",
     "type": "tile",
     "kind": "spider",
-    "x": 1350.4716053308855,
-    "y": 3154.3038777577763,
+    "x": 1361.1432153525534,
+    "y": 3172.390246645568,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -1006,8 +1006,8 @@
     "id": "85813d77-0a27-4764-b056-322e35906550",
     "type": "tile",
     "kind": "spider",
-    "x": 1588.2090394835327,
-    "y": -2027.3936245497746,
+    "x": 1924.9798229869125,
+    "y": -2154.6156327814933,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -1049,8 +1049,8 @@
     "id": "2454335f-e5c7-4a1a-bb19-b014e5529696",
     "type": "tile",
     "kind": "spider",
-    "x": 4094.976810937412,
-    "y": 2245.502448671316,
+    "x": 4118.885911098194,
+    "y": 2378.1918194420123,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -1072,9 +1072,9 @@
           "y": 2510.1323844261055
         }
       ],
-      "currentWaypointIndex": 1,
+      "currentWaypointIndex": 2,
       "anim": "walk",
-      "dir": "000",
+      "dir": "180",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -1084,8 +1084,8 @@
     "id": "3637e491-86e3-4ef8-a1bb-d3e00d544704",
     "type": "tile",
     "kind": "spider",
-    "x": 1861.3307535855063,
-    "y": 4183.780113109192,
+    "x": 1516.3787388238425,
+    "y": 3904.2374374550236,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -1127,8 +1127,8 @@
     "id": "02b66802-e75d-4007-ba4e-9dff402ae7e7",
     "type": "tile",
     "kind": "spider",
-    "x": -3498.3546023201397,
-    "y": -4542.550066301662,
+    "x": -3471.1278327129426,
+    "y": -4474.542282866754,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -1158,9 +1158,9 @@
           "y": -4388.271039135856
         }
       ],
-      "currentWaypointIndex": 2,
+      "currentWaypointIndex": 1,
       "anim": "walk",
-      "dir": "090",
+      "dir": "292",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -1170,8 +1170,8 @@
     "id": "56c2ebaa-700b-4f4d-9278-1bd244a94204",
     "type": "tile",
     "kind": "spider",
-    "x": 3431.196060588463,
-    "y": 1114.9965680578266,
+    "x": 3026.1320864284426,
+    "y": 998.440174519437,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -1201,9 +1201,9 @@
           "y": 1275.9981483373426
         }
       ],
-      "currentWaypointIndex": 1,
+      "currentWaypointIndex": 3,
       "anim": "walk",
-      "dir": "000",
+      "dir": "337",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -1213,8 +1213,8 @@
     "id": "99d391e1-f5aa-4398-b257-ff237b9bf27f",
     "type": "tile",
     "kind": "spider",
-    "x": 5664.2162936429095,
-    "y": -866.3874805812209,
+    "x": 5742.482325401571,
+    "y": -726.9706035573681,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -1244,9 +1244,9 @@
           "y": -726.3673004937125
         }
       ],
-      "currentWaypointIndex": 1,
+      "currentWaypointIndex": 4,
       "anim": "walk",
-      "dir": "292",
+      "dir": "090",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -1256,8 +1256,8 @@
     "id": "a232d42a-f926-4b1b-b6c7-cb2953d73e87",
     "type": "tile",
     "kind": "spider",
-    "x": -3616.970194899337,
-    "y": -2090.1878488791513,
+    "x": -3761.3576476884837,
+    "y": -1981.5776771034014,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -1291,9 +1291,9 @@
           "y": -2062.5301720722596
         }
       ],
-      "currentWaypointIndex": 0,
+      "currentWaypointIndex": 5,
       "anim": "walk",
-      "dir": "090",
+      "dir": "000",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -1303,8 +1303,8 @@
     "id": "573f8870-0b90-4bb7-879c-3690bb9887b0",
     "type": "tile",
     "kind": "spider",
-    "x": -2925.5240146596493,
-    "y": -2930.948025212218,
+    "x": -2693.5984174552045,
+    "y": -2872.635048960138,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -1338,9 +1338,9 @@
           "y": -2727.209380427078
         }
       ],
-      "currentWaypointIndex": 3,
+      "currentWaypointIndex": 2,
       "anim": "walk",
-      "dir": "315",
+      "dir": "180",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -1350,8 +1350,8 @@
     "id": "8e398393-f027-4653-ba7a-4b7cacd0f324",
     "type": "tile",
     "kind": "spider",
-    "x": -1086.552456293608,
-    "y": 3967.134270724802,
+    "x": -874.2190894946305,
+    "y": 4028.732878931103,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -1385,7 +1385,7 @@
           "y": 4082.6785675119236
         }
       ],
-      "currentWaypointIndex": 1,
+      "currentWaypointIndex": 4,
       "anim": "walk",
       "dir": "270",
       "z": 0,
@@ -1397,8 +1397,8 @@
     "id": "417710ca-6d49-4079-8cb9-bf22cd833346",
     "type": "tile",
     "kind": "spider",
-    "x": -4801.577087963153,
-    "y": 991.6905352680529,
+    "x": -4362.9373381321375,
+    "y": 896.9729954208861,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -1428,9 +1428,9 @@
           "y": 649.9730156406008
         }
       ],
-      "currentWaypointIndex": 1,
+      "currentWaypointIndex": 3,
       "anim": "walk",
-      "dir": "090",
+      "dir": "112",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -1440,8 +1440,8 @@
     "id": "2f67ac5d-d6e8-432d-9d51-abab6b7c3b79",
     "type": "tile",
     "kind": "spider",
-    "x": -2181.7130726084692,
-    "y": -4045.8828848930834,
+    "x": -2275.5602289004814,
+    "y": -3968.181342197664,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -1471,9 +1471,9 @@
           "y": -4213.813594410714
         }
       ],
-      "currentWaypointIndex": 2,
+      "currentWaypointIndex": 3,
       "anim": "walk",
-      "dir": "112",
+      "dir": "247",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -1483,8 +1483,8 @@
     "id": "dda21b8d-7af5-4738-be56-80b1e6cb9a9d",
     "type": "tile",
     "kind": "spider",
-    "x": -3437.0876568958256,
-    "y": -1662.5383603131888,
+    "x": -3399.815332024855,
+    "y": -1651.0590833885592,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -1518,8 +1518,8 @@
     "id": "e2552193-eb3f-47c1-9a23-0f2199a6ceea",
     "type": "tile",
     "kind": "spider",
-    "x": 1476.25268293228,
-    "y": -372.45055852225835,
+    "x": 1505.7971226667541,
+    "y": -480.48354459954646,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -1553,8 +1553,8 @@
     "id": "16c72e8d-3470-46b4-98ac-b119513a1f9f",
     "type": "tile",
     "kind": "spider",
-    "x": -3998.6117665267498,
-    "y": -3485.539974523009,
+    "x": -3630.858279988951,
+    "y": -3773.090716226745,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -1588,9 +1588,9 @@
           "y": -3562.6616643192256
         }
       ],
-      "currentWaypointIndex": 1,
+      "currentWaypointIndex": 2,
       "anim": "walk",
-      "dir": "270",
+      "dir": "067",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -1600,8 +1600,8 @@
     "id": "7b1b1e13-52d7-4641-9729-a78309ea1c5a",
     "type": "tile",
     "kind": "spider",
-    "x": 3259.5822279841054,
-    "y": -3602.884859720052,
+    "x": 3421.952769037646,
+    "y": -3559.7593753984634,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -1643,8 +1643,8 @@
     "id": "c0759405-27d0-4ca9-8472-3ecd6e92f1a3",
     "type": "tile",
     "kind": "spider",
-    "x": -5438.401577002568,
-    "y": 4080.2241972646716,
+    "x": -5405.693249576993,
+    "y": 3820.3237234154135,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -1666,9 +1666,9 @@
           "y": 4170.136283965841
         }
       ],
-      "currentWaypointIndex": 0,
+      "currentWaypointIndex": 1,
       "anim": "walk",
-      "dir": "337",
+      "dir": "135",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -1678,8 +1678,8 @@
     "id": "91e95cc5-024e-41c3-a1b6-bb96a51d158d",
     "type": "tile",
     "kind": "spider",
-    "x": 6099.509810509006,
-    "y": -2279.3779235320294,
+    "x": 5788.236356869876,
+    "y": -2419.417508237711,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -1713,9 +1713,9 @@
           "y": -2151.769341717423
         }
       ],
-      "currentWaypointIndex": 1,
+      "currentWaypointIndex": 0,
       "anim": "walk",
-      "dir": "135",
+      "dir": "022",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -1725,8 +1725,8 @@
     "id": "5f4b82ae-762e-48e8-a5d4-1df42da1f0cf",
     "type": "tile",
     "kind": "spider",
-    "x": -76.86200178163726,
-    "y": -1094.9775134446218,
+    "x": 40.12901423445273,
+    "y": -1421.6859454122334,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -1760,7 +1760,7 @@
           "y": -1226.217728300168
         }
       ],
-      "currentWaypointIndex": 0,
+      "currentWaypointIndex": 4,
       "anim": "walk",
       "dir": "202",
       "z": 0,
@@ -1772,8 +1772,8 @@
     "id": "1ace1abf-9ea4-44c9-90f5-cc577ae22213",
     "type": "tile",
     "kind": "spider",
-    "x": -4892.025276801709,
-    "y": 3485.8349438951086,
+    "x": -4678.47137482369,
+    "y": 3344.6587031532513,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -1811,8 +1811,8 @@
     "id": "b44ed92b-76d4-466c-81b7-9fece2dbb51a",
     "type": "tile",
     "kind": "spider",
-    "x": 5230.852126893946,
-    "y": 3337.5287443712873,
+    "x": 5323.593801703924,
+    "y": 3362.327570017737,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -1858,8 +1858,8 @@
     "id": "59b8c19c-72ce-414f-b8af-b0d8aaf1780b",
     "type": "tile",
     "kind": "spider",
-    "x": 4125.332807259566,
-    "y": -3108.993260051181,
+    "x": 4108.44926819446,
+    "y": -3314.467716013498,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -1881,9 +1881,9 @@
           "y": -3689.265266052532
         }
       ],
-      "currentWaypointIndex": 1,
+      "currentWaypointIndex": 0,
       "anim": "walk",
-      "dir": "000",
+      "dir": "180",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -1893,8 +1893,8 @@
     "id": "3a506e78-13b8-46aa-a6f4-9b9f696e451f",
     "type": "tile",
     "kind": "spider",
-    "x": -2493.811351593684,
-    "y": 375.1873380676986,
+    "x": -2763.349464708509,
+    "y": 476.0805791560574,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -1920,9 +1920,9 @@
           "y": 457.84469606475113
         }
       ],
-      "currentWaypointIndex": 1,
+      "currentWaypointIndex": 3,
       "anim": "walk",
-      "dir": "045",
+      "dir": "090",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -1932,8 +1932,8 @@
     "id": "0ff57c8d-5bb7-45a7-8a31-bcddeb9b18aa",
     "type": "tile",
     "kind": "spider",
-    "x": -906.6067394560353,
-    "y": -1903.3534930988217,
+    "x": -960.2118541714133,
+    "y": -1551.5262784117035,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -1959,9 +1959,9 @@
           "y": -1568.5528795772657
         }
       ],
-      "currentWaypointIndex": 3,
+      "currentWaypointIndex": 0,
       "anim": "walk",
-      "dir": "202",
+      "dir": "112",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -1971,8 +1971,8 @@
     "id": "048874b5-c968-402d-9dca-da77658d354b",
     "type": "tile",
     "kind": "spider",
-    "x": 4013.887919202255,
-    "y": 1378.4476147474666,
+    "x": 3698.1697769408847,
+    "y": 1416.4746399661883,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -2018,8 +2018,8 @@
     "id": "770422ce-aad3-4485-8ca5-0f3f90b29607",
     "type": "tile",
     "kind": "spider",
-    "x": 4683.402692174627,
-    "y": 1462.5870475917802,
+    "x": 4757.109087418944,
+    "y": 1144.9309657891063,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -2053,9 +2053,9 @@
           "y": 1575.5121935882366
         }
       ],
-      "currentWaypointIndex": 5,
+      "currentWaypointIndex": 2,
       "anim": "walk",
-      "dir": "180",
+      "dir": "022",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -2065,8 +2065,8 @@
     "id": "19a57e04-e690-4a44-91cb-cd988a0ae8d4",
     "type": "tile",
     "kind": "spider",
-    "x": -2571.248527977363,
-    "y": 4166.823263368223,
+    "x": -2575.148492622142,
+    "y": 4199.219828577379,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -2096,9 +2096,9 @@
           "y": 4217.119894143858
         }
       ],
-      "currentWaypointIndex": 4,
+      "currentWaypointIndex": 0,
       "anim": "walk",
-      "dir": "157",
+      "dir": "315",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -2108,8 +2108,8 @@
     "id": "05d02255-dd40-419d-b336-cd0ddc6a8797",
     "type": "tile",
     "kind": "spider",
-    "x": -2318.9777805192202,
-    "y": -2334.635603931249,
+    "x": -2427.9345077904723,
+    "y": -2319.521650697833,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -2155,8 +2155,8 @@
     "id": "4c92b1f4-8ab7-4899-88a7-e288b6b1cba8",
     "type": "tile",
     "kind": "spider",
-    "x": -3134.1414696105685,
-    "y": -3886.475039858671,
+    "x": -3365.1615880838403,
+    "y": -3935.890951488414,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -2178,9 +2178,9 @@
           "y": -3841.0047320338763
         }
       ],
-      "currentWaypointIndex": 0,
+      "currentWaypointIndex": 1,
       "anim": "walk",
-      "dir": "090",
+      "dir": "270",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -2190,8 +2190,8 @@
     "id": "0c2eb4d1-ccf0-4399-8a3c-e0fbc89d68e3",
     "type": "tile",
     "kind": "spider",
-    "x": -1922.1606827471564,
-    "y": 3538.4586339148473,
+    "x": -1889.9784587591462,
+    "y": 3545.7596242028535,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -2229,8 +2229,8 @@
     "id": "77ca7349-68e4-43ef-86c0-d6a59a4b91e7",
     "type": "tile",
     "kind": "spider",
-    "x": -660.1981800288003,
-    "y": -4002.3177611950055,
+    "x": -498.3449721310343,
+    "y": -4105.601540624314,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -2268,8 +2268,8 @@
     "id": "7fa0b4e4-937d-4d7a-8969-0a85c97a9724",
     "type": "tile",
     "kind": "spider",
-    "x": -3155.8429083665196,
-    "y": -3497.7448544018443,
+    "x": -3240.650304567144,
+    "y": -3582.2031855192263,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -2303,9 +2303,9 @@
           "y": -3358.480900018419
         }
       ],
-      "currentWaypointIndex": 2,
+      "currentWaypointIndex": 1,
       "anim": "walk",
-      "dir": "157",
+      "dir": "337",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -2315,8 +2315,8 @@
     "id": "7e0d8e28-700c-41c9-8ded-083c78b9e3f7",
     "type": "tile",
     "kind": "spider",
-    "x": 5013.387636235966,
-    "y": -1158.1913994033046,
+    "x": 5009.634129847511,
+    "y": -1166.3713254293646,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -2354,8 +2354,8 @@
     "id": "5c4577aa-254b-435f-b45a-cb2f0f800500",
     "type": "tile",
     "kind": "spider",
-    "x": 2675.2163861484237,
-    "y": -2967.533040335441,
+    "x": 2640.436593033383,
+    "y": -2805.0655491658863,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -2381,9 +2381,9 @@
           "y": -2859.290124672421
         }
       ],
-      "currentWaypointIndex": 2,
+      "currentWaypointIndex": 0,
       "anim": "walk",
-      "dir": "157",
+      "dir": "112",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -2393,8 +2393,8 @@
     "id": "4b95f249-3964-4038-99c4-f2af394fe229",
     "type": "tile",
     "kind": "spider",
-    "x": -649.9403964552143,
-    "y": 4042.6392769785534,
+    "x": -625.5090832020278,
+    "y": 3956.0187774837605,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -2436,8 +2436,8 @@
     "id": "2ac2f3f6-d1e1-4fc1-9f2c-33cc38a15689",
     "type": "tile",
     "kind": "spider",
-    "x": 585.0459966295356,
-    "y": 3857.1339521135096,
+    "x": 469.10671030325386,
+    "y": 3756.544332754586,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -2463,9 +2463,9 @@
           "y": 3640.807953796029
         }
       ],
-      "currentWaypointIndex": 3,
+      "currentWaypointIndex": 2,
       "anim": "walk",
-      "dir": "337",
+      "dir": "135",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -2475,8 +2475,8 @@
     "id": "cbbc9bfa-2abd-4c89-a982-1f557805a13e",
     "type": "tile",
     "kind": "spider",
-    "x": -3596.5027016626414,
-    "y": -54.66222843518106,
+    "x": -3441.6738900819673,
+    "y": 50.727106151502156,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -2502,9 +2502,9 @@
           "y": -126.26059203385023
         }
       ],
-      "currentWaypointIndex": 3,
+      "currentWaypointIndex": 2,
       "anim": "walk",
-      "dir": "292",
+      "dir": "090",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -2514,8 +2514,8 @@
     "id": "094f86b3-31d7-46bb-a8b5-eb2539a86f19",
     "type": "tile",
     "kind": "spider",
-    "x": 3690.728441699895,
-    "y": 4098.084174510173,
+    "x": 3469.6718764135053,
+    "y": 4047.2475113386695,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -2537,9 +2537,9 @@
           "y": 4042.178760190638
         }
       ],
-      "currentWaypointIndex": 0,
+      "currentWaypointIndex": 2,
       "anim": "walk",
-      "dir": "112",
+      "dir": "292",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -2549,8 +2549,8 @@
     "id": "1f0f809c-9805-4f3d-a0ce-23ec8647a33a",
     "type": "tile",
     "kind": "spider",
-    "x": -3773.544005439783,
-    "y": 482.04462619696983,
+    "x": -3814.9357105581435,
+    "y": 604.4789935761734,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -2576,9 +2576,9 @@
           "y": 713.0098827224105
         }
       ],
-      "currentWaypointIndex": 0,
+      "currentWaypointIndex": 1,
       "anim": "walk",
-      "dir": "337",
+      "dir": "180",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -2588,8 +2588,8 @@
     "id": "8a263d3d-fbdb-4f58-ba9e-d338cfc31064",
     "type": "tile",
     "kind": "spider",
-    "x": -508.78625413627555,
-    "y": 1589.0976206410548,
+    "x": -341.6431266377011,
+    "y": 1487.0239507183414,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -2611,9 +2611,9 @@
           "y": 1962.9802049552163
         }
       ],
-      "currentWaypointIndex": 1,
+      "currentWaypointIndex": 0,
       "anim": "walk",
-      "dir": "225",
+      "dir": "000",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -2623,8 +2623,8 @@
     "id": "50b29bf8-4a4f-4121-854b-bb0b20679fd2",
     "type": "tile",
     "kind": "spider",
-    "x": 5666.188387123803,
-    "y": -700.7408564991216,
+    "x": 5577.764454627694,
+    "y": -663.3616087549505,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -2666,8 +2666,8 @@
     "id": "554c21d4-bfe0-40bb-bb53-17d1ca867e3c",
     "type": "tile",
     "kind": "spider",
-    "x": -997.0635841955984,
-    "y": -3140.7974305153552,
+    "x": -999.5167653602666,
+    "y": -3190.7372132759215,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -2709,8 +2709,8 @@
     "id": "704d52d7-a43c-49eb-b6ec-a2e61471dfe6",
     "type": "tile",
     "kind": "spider",
-    "x": -5291.4975196015175,
-    "y": 749.199518779094,
+    "x": -5263.353842321739,
+    "y": 453.6938530419691,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -2736,9 +2736,9 @@
           "y": 1144.3907666091404
         }
       ],
-      "currentWaypointIndex": 2,
+      "currentWaypointIndex": 0,
       "anim": "walk",
-      "dir": "180",
+      "dir": "000",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -2748,8 +2748,8 @@
     "id": "aa78329d-74c7-4a58-b54c-42b91a652e35",
     "type": "tile",
     "kind": "spider",
-    "x": -1395.1033999482727,
-    "y": 3896.9710558544116,
+    "x": -1381.4240718557562,
+    "y": 3839.6227671553706,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -2775,9 +2775,9 @@
           "y": 3878.8754744235994
         }
       ],
-      "currentWaypointIndex": 3,
+      "currentWaypointIndex": 2,
       "anim": "walk",
-      "dir": "292",
+      "dir": "157",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -2787,8 +2787,8 @@
     "id": "25039a89-7d37-44a1-b949-b67b54c05be1",
     "type": "tile",
     "kind": "spider",
-    "x": -1262.7352330154295,
-    "y": -3672.003183866686,
+    "x": -1557.376210874452,
+    "y": -3371.3531953151837,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -2810,9 +2810,9 @@
           "y": -3762.3566833328987
         }
       ],
-      "currentWaypointIndex": 2,
+      "currentWaypointIndex": 0,
       "anim": "walk",
-      "dir": "000",
+      "dir": "225",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -2822,8 +2822,8 @@
     "id": "98b3f321-fb3a-42fd-8a63-781df9f8af87",
     "type": "tile",
     "kind": "spider",
-    "x": -4797.353809933537,
-    "y": -4480.195275977935,
+    "x": -4889.6497098351,
+    "y": -4410.329634176451,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -2853,9 +2853,9 @@
           "y": -4533.40754008386
         }
       ],
-      "currentWaypointIndex": 0,
+      "currentWaypointIndex": 4,
       "anim": "walk",
-      "dir": "180",
+      "dir": "045",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -2865,8 +2865,8 @@
     "id": "af8c5151-9afd-4f02-927b-6356c41160e9",
     "type": "tile",
     "kind": "spider",
-    "x": -347.312882582955,
-    "y": 2711.2267022435008,
+    "x": -683.0209553345987,
+    "y": 2984.7917302405526,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -2888,9 +2888,9 @@
           "y": 2748.0297851991636
         }
       ],
-      "currentWaypointIndex": 2,
+      "currentWaypointIndex": 0,
       "anim": "walk",
-      "dir": "202",
+      "dir": "225",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -2900,8 +2900,8 @@
     "id": "2bb2658a-6c62-4b29-a5bd-68006c683b30",
     "type": "tile",
     "kind": "spider",
-    "x": -4032.6247401764676,
-    "y": -3835.4894746700693,
+    "x": -3767.895392111554,
+    "y": -3646.774536472278,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -2935,9 +2935,9 @@
           "y": -3618.489615936562
         }
       ],
-      "currentWaypointIndex": 0,
+      "currentWaypointIndex": 3,
       "anim": "walk",
-      "dir": "000",
+      "dir": "157",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -2947,8 +2947,8 @@
     "id": "998ea0cf-cd46-4bba-a98b-9fcff9441a8c",
     "type": "tile",
     "kind": "spider",
-    "x": -4709.442269998922,
-    "y": 3019.390937513707,
+    "x": -4840.594634724307,
+    "y": 3241.5689229824015,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -2990,8 +2990,8 @@
     "id": "31d4310d-f0a7-4eb3-a49e-e45229bfeb03",
     "type": "tile",
     "kind": "spider",
-    "x": -3580.792023227648,
-    "y": 3128.097849078191,
+    "x": -3842.7945335983404,
+    "y": 3041.6263632987384,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -3013,9 +3013,9 @@
           "y": 2808.836015767405
         }
       ],
-      "currentWaypointIndex": 0,
+      "currentWaypointIndex": 1,
       "anim": "walk",
-      "dir": "180",
+      "dir": "315",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -3025,8 +3025,8 @@
     "id": "2690b7b8-ffdb-4c4c-868c-e0decdcbc261",
     "type": "tile",
     "kind": "spider",
-    "x": -1191.694984325449,
-    "y": -4294.333198614174,
+    "x": -973.1120603026295,
+    "y": -4559.95982628093,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -3064,8 +3064,8 @@
     "id": "4df30386-73f0-474a-b363-d9324d4517cb",
     "type": "tile",
     "kind": "spider",
-    "x": 960.6156420807318,
-    "y": 3377.1420628912692,
+    "x": 610.8320711518635,
+    "y": 3376.518318520656,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -3087,9 +3087,9 @@
           "y": 3264.2761028592063
         }
       ],
-      "currentWaypointIndex": 1,
+      "currentWaypointIndex": 2,
       "anim": "walk",
-      "dir": "247",
+      "dir": "315",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -3099,8 +3099,8 @@
     "id": "5a6f2b7d-9b89-4fbb-972f-fdf10cb6d069",
     "type": "tile",
     "kind": "spider",
-    "x": -2379.514739691945,
-    "y": -3305.881523319014,
+    "x": -2075.2845545039163,
+    "y": -3790.26566263467,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -3142,8 +3142,8 @@
     "id": "110cfce1-62bd-42fd-b9fc-83d4e09ee95d",
     "type": "tile",
     "kind": "spider",
-    "x": 2050.144952437239,
-    "y": 1481.0700605405766,
+    "x": 2120.1084161396707,
+    "y": 1621.9626177597447,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -3173,9 +3173,9 @@
           "y": 1388.8919234547964
         }
       ],
-      "currentWaypointIndex": 4,
+      "currentWaypointIndex": 0,
       "anim": "walk",
-      "dir": "045",
+      "dir": "180",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -3185,8 +3185,8 @@
     "id": "5d241fe5-2320-4aa3-b8c7-6e19185726c0",
     "type": "tile",
     "kind": "spider",
-    "x": 2255.520870826789,
-    "y": -2964.6846277305226,
+    "x": 2045.1857864111062,
+    "y": -3023.5562289620093,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -3220,9 +3220,9 @@
           "y": -3040.2057819232045
         }
       ],
-      "currentWaypointIndex": 2,
+      "currentWaypointIndex": 3,
       "anim": "walk",
-      "dir": "292",
+      "dir": "090",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -3232,8 +3232,8 @@
     "id": "ea18d27b-81bc-43b9-94b9-898ccaa542cf",
     "type": "tile",
     "kind": "spider",
-    "x": 4234.7270874329,
-    "y": 340.38137236468526,
+    "x": 4020.289078438919,
+    "y": 326.07639950373766,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -3255,9 +3255,9 @@
           "y": 669.3442033492471
         }
       ],
-      "currentWaypointIndex": 0,
+      "currentWaypointIndex": 2,
       "anim": "walk",
-      "dir": "022",
+      "dir": "157",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -3267,8 +3267,8 @@
     "id": "9d91c5ff-8209-4b25-9f4f-64c8a2669144",
     "type": "tile",
     "kind": "spider",
-    "x": -2289.269286752757,
-    "y": -2493.26790223518,
+    "x": -2438.876221007163,
+    "y": -2550.254713468713,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -3302,9 +3302,9 @@
           "y": -2490.532661205017
         }
       ],
-      "currentWaypointIndex": 3,
+      "currentWaypointIndex": 1,
       "anim": "walk",
-      "dir": "202",
+      "dir": "135",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -3314,8 +3314,8 @@
     "id": "3e5d9d3a-125c-4d8e-93fb-a13a5966503f",
     "type": "tile",
     "kind": "spider",
-    "x": -4689.981020842984,
-    "y": -425.77512581556766,
+    "x": -4887.745509760571,
+    "y": -435.42949908106186,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -3353,8 +3353,8 @@
     "id": "0462ffbc-3834-49ac-828c-1a1715224b28",
     "type": "tile",
     "kind": "spider",
-    "x": 60.09461439565878,
-    "y": 735.3468895716784,
+    "x": -201.77590235695575,
+    "y": 768.8107873679261,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -3388,8 +3388,8 @@
     "id": "7b15c427-2b52-4a22-9ee2-89247191c58c",
     "type": "tile",
     "kind": "spider",
-    "x": -2797.8859083855255,
-    "y": -3954.214493062052,
+    "x": -3133.950474425135,
+    "y": -4153.711438935167,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -3423,9 +3423,9 @@
           "y": -3959.3245194076244
         }
       ],
-      "currentWaypointIndex": 4,
+      "currentWaypointIndex": 3,
       "anim": "walk",
-      "dir": "112",
+      "dir": "202",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -3435,8 +3435,8 @@
     "id": "51e7bbb6-407f-4c2a-bb05-93381cb7480b",
     "type": "tile",
     "kind": "spider",
-    "x": -3876.270579854081,
-    "y": 1147.744575732767,
+    "x": -3439.2729996386715,
+    "y": 939.684212169938,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -3470,8 +3470,8 @@
     "id": "6d79ec00-a2f0-4da8-be36-020cea3523ed",
     "type": "tile",
     "kind": "spider",
-    "x": 2699.3723224238634,
-    "y": 2399.4978335266833,
+    "x": 2916.688410078095,
+    "y": 2670.7261508488305,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -3493,44 +3493,9 @@
           "y": 2807.563007349812
         }
       ],
-      "currentWaypointIndex": 1,
+      "currentWaypointIndex": 2,
       "anim": "walk",
-      "dir": "157",
-      "z": 0,
-      "entity": true,
-      "chasing": false
-    }
-  },
-  {
-    "id": "e37e6d0e-6c51-432b-a489-db8f4126e6a8",
-    "type": "tile",
-    "kind": "spider",
-    "x": -131.25125855869325,
-    "y": 380.361892808117,
-    "owner": null,
-    "hp": 50,
-    "maxHp": 50,
-    "meta": {
-      "title": "Spider 88",
-      "w": 100,
-      "h": 100,
-      "waypoints": [
-        {
-          "x": -116.12777724815376,
-          "y": 375.13883689708484
-        },
-        {
-          "x": -219.98970329764552,
-          "y": 411.0086631391347
-        },
-        {
-          "x": -446.9455373581812,
-          "y": 617.2005759090046
-        }
-      ],
-      "currentWaypointIndex": 1,
-      "anim": "walk",
-      "dir": "247",
+      "dir": "112",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -3540,8 +3505,8 @@
     "id": "537df1c2-a415-4d72-8bfa-80831febd28e",
     "type": "tile",
     "kind": "spider",
-    "x": 3527.8625814240245,
-    "y": 4023.2101460581166,
+    "x": 3541.7190432004013,
+    "y": 4008.787994102186,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -3579,8 +3544,8 @@
     "id": "8100178e-8e92-4565-9adf-f620162dbf8d",
     "type": "tile",
     "kind": "spider",
-    "x": -3140.1709595989187,
-    "y": 1730.7582029766163,
+    "x": -3216.3722656796795,
+    "y": 1939.2226810413454,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -3606,9 +3571,9 @@
           "y": 1864.0772127874504
         }
       ],
-      "currentWaypointIndex": 0,
+      "currentWaypointIndex": 2,
       "anim": "walk",
-      "dir": "045",
+      "dir": "337",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -3618,8 +3583,8 @@
     "id": "36bbffc2-a57b-43ba-a6c4-a983f0553793",
     "type": "tile",
     "kind": "spider",
-    "x": -5301.107224786749,
-    "y": -1836.3772144202253,
+    "x": -4915.106752384725,
+    "y": -2066.200303837417,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -3649,52 +3614,9 @@
           "y": -1552.1719776187203
         }
       ],
-      "currentWaypointIndex": 3,
+      "currentWaypointIndex": 1,
       "anim": "walk",
-      "dir": "315",
-      "z": 0,
-      "entity": true,
-      "chasing": false
-    }
-  },
-  {
-    "id": "d1255f30-9678-466e-b4ca-30e6e4999123",
-    "type": "tile",
-    "kind": "spider",
-    "x": 681.190823808025,
-    "y": 239.0306338950919,
-    "owner": null,
-    "hp": 50,
-    "maxHp": 50,
-    "meta": {
-      "title": "Spider 92",
-      "w": 100,
-      "h": 100,
-      "waypoints": [
-        {
-          "x": 583.7148062768098,
-          "y": -79.78669701943915
-        },
-        {
-          "x": 437.1079571167326,
-          "y": -13.416727143138758
-        },
-        {
-          "x": 260.8983409132857,
-          "y": -82.22704291100027
-        },
-        {
-          "x": 400.14321235299184,
-          "y": -161.7095836160956
-        },
-        {
-          "x": 705.7509174680154,
-          "y": 319.3599672634972
-        }
-      ],
-      "currentWaypointIndex": 0,
-      "anim": "walk",
-      "dir": "337",
+      "dir": "225",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -3704,8 +3626,8 @@
     "id": "83dd0d51-0594-4823-9cdc-abee739fafe6",
     "type": "tile",
     "kind": "spider",
-    "x": 5561.398082737956,
-    "y": 2438.376518450821,
+    "x": 5560.752711556948,
+    "y": 2420.388091725874,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -3739,8 +3661,8 @@
     "id": "7e67eecc-787a-412b-8c9f-2cf90f03b9cd",
     "type": "tile",
     "kind": "spider",
-    "x": -418.87050258431464,
-    "y": 876.0444676159415,
+    "x": -484.2574170856425,
+    "y": 1014.9164086081956,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -3766,9 +3688,9 @@
           "y": 1272.1866368195244
         }
       ],
-      "currentWaypointIndex": 2,
+      "currentWaypointIndex": 1,
       "anim": "walk",
-      "dir": "270",
+      "dir": "067",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -3778,8 +3700,8 @@
     "id": "f96cdeb8-b2b7-4f16-ba8c-0e16e29c4b87",
     "type": "tile",
     "kind": "spider",
-    "x": 5503.23868121331,
-    "y": 3054.9542151115234,
+    "x": 5591.542758952271,
+    "y": 2635.216561123306,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -3813,9 +3735,9 @@
           "y": 2651.424558745713
         }
       ],
-      "currentWaypointIndex": 2,
+      "currentWaypointIndex": 4,
       "anim": "walk",
-      "dir": "157",
+      "dir": "202",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -3825,8 +3747,8 @@
     "id": "afc1b15f-8425-4dff-93d5-021eb9c20542",
     "type": "tile",
     "kind": "spider",
-    "x": 5962.980678539971,
-    "y": -3037.1392067691436,
+    "x": 5988.5560825957,
+    "y": -2942.225907918898,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -3852,9 +3774,9 @@
           "y": -2726.5967995244105
         }
       ],
-      "currentWaypointIndex": 2,
+      "currentWaypointIndex": 1,
       "anim": "walk",
-      "dir": "135",
+      "dir": "337",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -3864,8 +3786,8 @@
     "id": "ffa08206-3948-40fd-885a-184017d9724b",
     "type": "tile",
     "kind": "spider",
-    "x": -28.942337906008945,
-    "y": 1993.054890054725,
+    "x": -66.15364616625259,
+    "y": 1985.3530371892696,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -3911,8 +3833,8 @@
     "id": "6159e06d-0d54-4ffa-9ed4-ea78ff007d00",
     "type": "tile",
     "kind": "spider",
-    "x": -3701.099659712876,
-    "y": 4000.9159117344084,
+    "x": -3737.328069776422,
+    "y": 4074.4788256535116,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -3946,8 +3868,8 @@
     "id": "698a6cef-2f68-42a6-9c78-16abdb9a8c96",
     "type": "tile",
     "kind": "spider",
-    "x": 4497.348244009515,
-    "y": -1215.839777054765,
+    "x": 4491.215162875949,
+    "y": -1003.1276302926517,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -3973,9 +3895,9 @@
           "y": -1250.383562799398
         }
       ],
-      "currentWaypointIndex": 2,
+      "currentWaypointIndex": 1,
       "anim": "walk",
-      "dir": "022",
+      "dir": "225",
       "z": 0,
       "entity": true,
       "chasing": false
@@ -3985,8 +3907,8 @@
     "id": "240d7b7a-ac2b-4a34-a6b1-e84604bc6466",
     "type": "tile",
     "kind": "spider",
-    "x": -1922.969817576061,
-    "y": -1476.9449941551393,
+    "x": -1900.064412430379,
+    "y": -1507.2656540277803,
     "owner": null,
     "hp": 50,
     "maxHp": 50,
@@ -4114,8 +4036,8 @@
     "id": "50cd791b-400b-4167-8211-0c4c8aa38242",
     "type": "tile",
     "kind": "npc",
-    "x": -81.779063352641,
-    "y": -276.4767204161343,
+    "x": -169.15908626586346,
+    "y": -29.05369247306547,
     "meta": {
       "collides": false,
       "cw": 72,
@@ -4131,12 +4053,12 @@
       "actions": [],
       "waypoints": [
         {
-          "x": -176.15999914169333,
-          "y": -53.26799955368017
+          "x": -164.7519999313356,
+          "y": -26.6920002746582
         },
         {
-          "x": -323.1599991416933,
-          "y": -180.26799955368017
+          "x": -373.7519999313356,
+          "y": -138.69200027465823
         },
         {
           "x": -138.15999914169333,
@@ -4147,9 +4069,119 @@
           "y": -216.26799955368017
         }
       ],
-      "currentWaypointIndex": 3,
-      "dir": "112",
+      "currentWaypointIndex": 1,
+      "dir": "292",
       "anim": "walk",
+      "chasing": false,
+      "givesQuest": true
+    },
+    "owner": "Diomdes246",
+    "itemSlots": []
+  },
+  {
+    "id": "b1f90ad5-a3a1-4ece-8375-0c4cba55150a",
+    "type": "tile",
+    "kind": "campfire",
+    "x": -181.7519999313356,
+    "y": -120.69200027465823,
+    "meta": {
+      "collides": false,
+      "cw": 64,
+      "ch": 64,
+      "cx": 0,
+      "cy": 0,
+      "w": 192,
+      "h": 172,
+      "z": 0
+    },
+    "owner": "Diomdes246",
+    "itemSlots": []
+  },
+  {
+    "id": "804c2d63-96c4-4dc5-9421-3434e61feba2",
+    "type": "tile",
+    "kind": "Gravel Road NExSW A",
+    "x": -60.64799972534172,
+    "y": -74.08400003433229,
+    "meta": {
+      "collides": false,
+      "cw": 64,
+      "ch": 64,
+      "cx": 0,
+      "cy": 0,
+      "w": 516,
+      "h": 354,
+      "z": 0
+    },
+    "owner": "Diomdes246",
+    "itemSlots": []
+  },
+  {
+    "id": "82504fb9-73d4-496b-8006-195493e5ec9f",
+    "type": "tile",
+    "kind": "Gravel Road NExSW A",
+    "x": 260.35200027465817,
+    "y": -266.0840000343323,
+    "meta": {
+      "collides": false,
+      "cw": 64,
+      "ch": 64,
+      "cx": 0,
+      "cy": 0,
+      "w": 516,
+      "h": 354,
+      "z": 0
+    },
+    "owner": "Diomdes246",
+    "itemSlots": []
+  },
+  {
+    "id": "2fdf37bb-17d7-4ab2-96f6-c7bc66d787ff",
+    "type": "tile",
+    "kind": "Gravel Road NExSW A",
+    "x": -379.7919995880127,
+    "y": 111.52400003433223,
+    "meta": {
+      "collides": false,
+      "cw": 64,
+      "ch": 64,
+      "cx": 0,
+      "cy": 0,
+      "w": 516,
+      "h": 354,
+      "z": 0
+    },
+    "owner": "Diomdes246",
+    "itemSlots": []
+  },
+  {
+    "id": "981d54e7-76eb-4b9b-9600-2640e24c3f13",
+    "type": "tile",
+    "kind": "npc",
+    "x": -504.2480000686645,
+    "y": -246.2359999656677,
+    "meta": {
+      "collides": false,
+      "cw": 64,
+      "ch": 64,
+      "cx": 0,
+      "cy": 0,
+      "w": 64,
+      "h": 64,
+      "z": 2,
+      "entity": true,
+      "title": "Captain",
+      "bio": "[Type: Collect](n=5, entity=green resource)",
+      "actions": [],
+      "waypoints": [
+        {
+          "x": -504.2480000686645,
+          "y": -246.2359999656677
+        }
+      ],
+      "currentWaypointIndex": 0,
+      "dir": "135",
+      "anim": "idle",
       "chasing": false,
       "givesQuest": true
     },

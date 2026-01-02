@@ -1935,10 +1935,12 @@
     if (me && Array.isArray(me.units)) {
       myUnits = mergeUnitsPreserveFrames(myUnits, me.units);
     }
-    // sync authoritative resource counts from server
+    // sync authoritative resource counts from server and advance collect quests on gains
     if (me) {
+      const prevResources = { ...resourceCounts };
       resourceCounts = me.resources || { red: 0, green: 0, blue: 0 };
       window.resourceCounts = resourceCounts;
+      handleResourceGain(prevResources, resourceCounts);
     }
     try { updateBuildButton(); updateMineButton(); updateBlacksmithButton(); } catch (e) {}
 
@@ -2094,7 +2096,7 @@
   let mapObjects = []; // persistent objects from server
   let isEditingEntity = false; // flag to prevent refresh while editing
   let acceptedQuestIds = new Set();
-  let questProgress = {}; // questId -> { kills: { entity: count } }
+  let questProgress = {}; // questId -> { kills: { entity: count }, collects: { entity: count } }
 
   try {
     const storedQuestIds = JSON.parse(localStorage.getItem("aoeAcceptedQuests") || "[]");
@@ -2123,29 +2125,92 @@
   }
 
   function getQuestProgress(questId) {
-    return questProgress[questId] || { kills: {} };
+    const base = questProgress[questId] || { kills: {}, collects: {} };
+    if (!base.kills) base.kills = {};
+    if (!base.collects) base.collects = {};
+    return base;
   }
 
   function incrementQuestKill(questId, entityKind) {
     if (!questProgress[questId]) {
-      questProgress[questId] = { kills: {} };
+      questProgress[questId] = { kills: {}, collects: {} };
     }
     if (!questProgress[questId].kills) {
       questProgress[questId].kills = {};
+    }
+    if (!questProgress[questId].collects) {
+      questProgress[questId].collects = {};
     }
     questProgress[questId].kills[entityKind] = (questProgress[questId].kills[entityKind] || 0) + 1;
     persistQuestProgress();
     syncQuestLogUI();
   }
 
+  function incrementQuestCollect(questId, entityKind, amount) {
+    if (!questProgress[questId]) {
+      questProgress[questId] = { kills: {}, collects: {} };
+    }
+    if (!questProgress[questId].collects) {
+      questProgress[questId].collects = {};
+    }
+    if (!questProgress[questId].kills) {
+      questProgress[questId].kills = {};
+    }
+    questProgress[questId].collects[entityKind] = (questProgress[questId].collects[entityKind] || 0) + amount;
+    persistQuestProgress();
+    syncQuestLogUI();
+  }
+
+  function handleResourceGain(prevResources, nextResources) {
+    const resourceTypes = ["red", "green", "blue"];
+    for (const type of resourceTypes) {
+      const prevVal = (prevResources && prevResources[type]) || 0;
+      const nextVal = (nextResources && nextResources[type]) || 0;
+      const delta = nextVal - prevVal;
+      if (delta <= 0) continue;
+
+      for (const questId of acceptedQuestIds) {
+        const questGiver = mapObjects.find(obj => obj.id === questId);
+        if (!questGiver) continue;
+        const quest = parseQuestFromBio(questGiver.meta?.bio);
+        if (!quest || quest.type !== 'Collect') continue;
+
+        const questTarget = normalizeCollectTarget(quest.params.entity);
+        const resourceKey = normalizeCollectTarget(type);
+        if (questTarget && questTarget === resourceKey) {
+          incrementQuestCollect(questId, questTarget, delta);
+        }
+      }
+    }
+  }
+
+  function normalizeCollectTarget(entity) {
+    const clean = (entity || "").toString().trim().toLowerCase();
+    if (!clean) return "";
+    if (clean.endsWith(" resource")) return clean.replace(/\s*resource$/, "").trim();
+    return clean;
+  }
+
   function isQuestComplete(obj) {
     const quest = parseQuestFromBio(obj?.meta?.bio);
-    if (!quest || quest.type !== 'Kill') return false;
+    if (!quest) return false;
     const progress = getQuestProgress(obj.id);
-    const target = quest.params.n || 0;
-    const entity = quest.params.entity || '';
-    const current = progress.kills[entity] || 0;
-    return current >= target;
+
+    if (quest.type === 'Kill') {
+      const target = quest.params.n || 0;
+      const entity = quest.params.entity || '';
+      const current = progress.kills[entity] || 0;
+      return current >= target;
+    }
+
+    if (quest.type === 'Collect') {
+      const target = quest.params.n || 0;
+      const entity = normalizeCollectTarget(quest.params.entity);
+      const current = progress.collects[entity] || 0;
+      return current >= target;
+    }
+
+    return false;
   }
 
   const questLogToggleBtn = document.getElementById("questLogToggle");
@@ -2195,6 +2260,16 @@
       const target = quest.params.n;
       const entityName = quest.params.entity.charAt(0).toUpperCase() + quest.params.entity.slice(1);
       return `Kill ${entityName}s: ${current}/${target}`;
+    }
+
+    // Show progress for collect quests
+    if (quest.type === 'Collect' && quest.params.n && quest.params.entity) {
+      const progress = getQuestProgress(obj.id);
+      const entityKey = normalizeCollectTarget(quest.params.entity);
+      const current = progress.collects[entityKey] || 0;
+      const target = quest.params.n;
+      const label = quest.params.entity;
+      return `Collect ${label}: ${current}/${target}`;
     }
     
     const params = Object.entries(quest.params || {})
@@ -2355,18 +2430,25 @@
       acceptedQuestIds.add(questDialogEntityId);
       persistAcceptedQuests();
       
-      // Initialize quest progress if it's a kill quest
+      // Initialize quest progress if it's a kill or collect quest
       const obj = mapObjects.find(o => o.id === questDialogEntityId);
       if (obj) {
         const quest = parseQuestFromBio(obj.meta?.bio);
-        if (quest && quest.type === 'Kill') {
+        if (quest && (quest.type === 'Kill' || quest.type === 'Collect')) {
           if (!questProgress[questDialogEntityId]) {
-            questProgress[questDialogEntityId] = { kills: {} };
-            if (quest.params.entity) {
-              questProgress[questDialogEntityId].kills[quest.params.entity] = 0;
-            }
-            persistQuestProgress();
+            questProgress[questDialogEntityId] = { kills: {}, collects: {} };
           }
+          if (!questProgress[questDialogEntityId].kills) questProgress[questDialogEntityId].kills = {};
+          if (!questProgress[questDialogEntityId].collects) questProgress[questDialogEntityId].collects = {};
+
+          if (quest.type === 'Kill' && quest.params.entity) {
+            questProgress[questDialogEntityId].kills[quest.params.entity] = 0;
+          }
+          if (quest.type === 'Collect' && quest.params.entity) {
+            const key = normalizeCollectTarget(quest.params.entity);
+            questProgress[questDialogEntityId].collects[key] = 0;
+          }
+          persistQuestProgress();
         }
       }
       
