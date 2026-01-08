@@ -29,6 +29,12 @@ DPS_PER_ATTACK_POINT = 5   # sword grants +1 attack -> +5 DPS
 HP_PER_DEFENSE_POINT = 15  # shield grants +1 defense -> +15 HP
 TICKS_PER_SECOND = 60.0
 
+# Shared collision constants (must match client defaults)
+BUILD_W = 256
+BUILD_H = 256
+BUILD_COLLISION_PADDING = -50
+GROUND_ITEM_COLLISION_PAD = 8
+
 GROUND_FILE = "ground_items.json"
 ground_lock = Lock()
 
@@ -41,13 +47,39 @@ resources = []
 # Each object: {id, type, kind, x, y, owner, rot, meta}
 map_objects = []
 
+def load_json_file(path, label, default):
+    """Load JSON data, falling back to *default* if it cannot be parsed."""
+    if not os.path.exists(path):
+        return default
+
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            raw = f.read()
+    except OSError as exc:
+        print(f"[LOAD_JSON] Could not read {label} file {path}: {exc}", flush=True)
+        return default
+
+    sanitized = raw.strip("\ufeff \t\r\n\x00")
+    if not sanitized:
+        print(f"[LOAD_JSON] {label} file {path} is empty; using default", flush=True)
+        return default
+
+    try:
+        return json.loads(sanitized)
+    except json.JSONDecodeError as exc:
+        backup_path = f"{path}.corrupt.{int(time.time())}"
+        try:
+            with open(backup_path, "w", encoding="utf-8") as backup:
+                backup.write(raw)
+            print(f"[LOAD_JSON] Saved unreadable {label} data to {backup_path}", flush=True)
+        except OSError as backup_exc:
+            print(f"[LOAD_JSON] Failed to write backup for {label}: {backup_exc}", flush=True)
+        print(f"[LOAD_JSON] {label} file {path} is corrupt ({exc}); using default", flush=True)
+        return default
+
 def load_map():
     global map_objects
-    if os.path.exists(MAP_FILE):
-        with open(MAP_FILE, "r", encoding="utf-8") as f:
-            map_objects = json.load(f)
-    else:
-        map_objects = []
+    map_objects = load_json_file(MAP_FILE, "map objects", [])
     
     # Spawn spiders if none exist
     spider_count = sum(1 for o in map_objects if o.get("kind") == "spider")
@@ -108,20 +140,12 @@ def load_map():
 
 def load_ground():
     global ground_items
-    if os.path.exists(GROUND_FILE):
-        with open(GROUND_FILE, "r", encoding="utf-8") as f:
-            ground_items[:] = json.load(f)
-    else:
-        ground_items.clear()
+    ground_items[:] = load_json_file(GROUND_FILE, "ground items", [])
 
 
 def load_resources():
     global resources
-    if os.path.exists(RES_FILE):
-        with open(RES_FILE, "r", encoding="utf-8") as f:
-            resources = json.load(f)
-    else:
-        resources = []
+    resources = load_json_file(RES_FILE, "resources", [])
 
 
 def save_resources():
@@ -307,6 +331,78 @@ def make_default_slots():
     ]
 
 
+def _safe_int(value, default=0):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def normalize_item_stats(payload, fallback_name="item"):
+    if payload is None:
+        payload = {}
+
+    meta = payload.get("meta") if isinstance(payload, dict) else None
+    stats_source = None
+
+    if isinstance(payload, dict):
+        stats_field = payload.get("itemStats")
+        if isinstance(stats_field, dict):
+            stats_source = stats_field
+        elif meta and isinstance(meta.get("itemStats"), dict):
+            stats_source = meta.get("itemStats")
+
+    if stats_source is None and isinstance(payload, dict):
+        stats_source = payload
+
+    def _pick(key):
+        if isinstance(stats_source, dict) and stats_source.get(key) is not None:
+            return stats_source.get(key)
+        if isinstance(payload, dict):
+            return payload.get(key)
+        return 0
+
+    name = None
+    if isinstance(stats_source, dict):
+        name = stats_source.get("name")
+    if not name and isinstance(payload, dict):
+        name = payload.get("name") or payload.get("title")
+    if not name and isinstance(meta, dict):
+        name = meta.get("title")
+    name = name or fallback_name
+
+    attack = _safe_int(_pick("attack"), 0)
+    defense = _safe_int(_pick("defense"), 0)
+    bonus = max(0, _safe_int(_pick("bonus"), 0))
+
+    item_tile = None
+    if isinstance(payload, dict):
+        item_tile = payload.get("itemTile")
+        if item_tile is None and isinstance(meta, dict):
+            item_tile = meta.get("itemTile")
+
+    return {
+        "name": name,
+        "attack": attack,
+        "defense": defense,
+        "bonus": bonus,
+        "itemTile": item_tile
+    }
+
+
+def slot_payload_from_source(payload, fallback_name="item"):
+    stats = normalize_item_stats(payload, fallback_name)
+    slot = {
+        "id": str(uuid.uuid4()),
+        "name": stats["name"],
+        "attack": stats["attack"],
+        "defense": stats["defense"],
+        "bonus": stats["bonus"],
+        "itemTile": stats["itemTile"]
+    }
+    return slot
+
+
 def compute_unit_stats(u):
     slots = u.get("itemSlots") or []
     attack_pts = 0
@@ -445,6 +541,37 @@ def emit_state(to_sid=None):
         socketio.emit("state", state, to=to_sid)
     else:
         socketio.emit("state", state)
+
+
+def find_world_collision(x, y, padding=0.0):
+    """Return blocking object if the point collides with any entity."""
+    pad = float(padding or 0.0)
+    for obj in map_objects:
+        meta = obj.get("meta") or {}
+        if not meta.get("collides"):
+            continue
+        cw = float(meta.get("cw") or meta.get("w") or 0)
+        ch = float(meta.get("ch") or meta.get("h") or 0)
+        if cw <= 0 or ch <= 0:
+            continue
+        cx = float(obj.get("x", 0)) + float(meta.get("cx", 0))
+        cy = float(obj.get("y", 0)) + float(meta.get("cy", 0))
+        half_w = cw / 2 + pad
+        half_h = ch / 2 + pad
+        if abs(x - cx) <= half_w and abs(y - cy) <= half_h:
+            return obj
+
+    for b in buildings:
+        bx = float(b.get("x", 0))
+        by = float(b.get("y", 0))
+        left = bx - BUILD_W / 2 - BUILD_COLLISION_PADDING - pad
+        right = bx + BUILD_W / 2 + BUILD_COLLISION_PADDING + pad
+        top = by - BUILD_H / 2 - BUILD_COLLISION_PADDING - pad
+        bottom = by + BUILD_H / 2 + BUILD_COLLISION_PADDING + pad
+        if left <= x <= right and top <= y <= bottom:
+            return b
+
+    return None
 
 
 
@@ -599,6 +726,20 @@ def update_map_object(data):
 
     print(f"[UPDATE_MAP_OBJECT] id={oid}, meta keys={list(meta.keys())}, itemSlots={itemSlots is not None}", flush=True)
 
+    # Validate position if provided (check for collision)
+    new_x = data.get("x")
+    new_y = data.get("y")
+    if new_x is not None and new_y is not None:
+        try:
+            new_x = float(new_x)
+            new_y = float(new_y)
+            collision = find_world_collision(new_x, new_y, GROUND_ITEM_COLLISION_PAD)
+            if collision:
+                socketio.emit("server_debug", {"msg": "update_map_object blocked: collision"}, to=request.sid)
+                return
+        except (TypeError, ValueError):
+            return
+
     with map_lock:
         changed = False
         for o in map_objects:
@@ -617,11 +758,11 @@ def update_map_object(data):
                 # update persistent itemSlots if provided
                 if itemSlots is not None:
                     o["itemSlots"] = itemSlots
-                # update position if provided
-                if data.get("x") is not None:
-                    o["x"] = float(data.get("x"))
-                if data.get("y") is not None:
-                    o["y"] = float(data.get("y"))
+                # update position if provided (already validated above)
+                if new_x is not None:
+                    o["x"] = new_x
+                if new_y is not None:
+                    o["y"] = new_y
                 # keep hp if provided, but only for building-type entities or town_center kind
                 if data.get("hp") is not None and (o.get("type") == "building" or o.get("kind") == "town_center"):
                     try:
@@ -667,6 +808,131 @@ def delete_ground_item(data):
             save_ground()
 
     socketio.emit("ground_items", ground_items)
+
+
+@socketio.on("move_ground_item")
+def move_ground_item(data):
+    pid = require_player_id()
+    if not pid:
+        return
+
+    ground_item_id = data.get("groundItemId")
+    x = data.get("x")
+    y = data.get("y")
+
+    if ground_item_id is None or x is None or y is None:
+        return
+
+    try:
+        x = float(x)
+        y = float(y)
+    except (TypeError, ValueError):
+        return
+
+    gi = next((g for g in ground_items if g.get("id") == ground_item_id), None)
+    if gi is None:
+        return
+
+    if find_world_collision(x, y, GROUND_ITEM_COLLISION_PAD):
+        socketio.emit("server_debug", {"msg": "move_ground_item blocked: collision"}, to=request.sid)
+        return
+
+    gi["x"] = x
+    gi["y"] = y
+
+    with ground_lock:
+        save_ground()
+
+    socketio.emit("ground_items", ground_items)
+
+
+@socketio.on("entity_drop_item")
+def entity_drop_item(data):
+    """Drop an item from an entity slot onto the ground at world coords."""
+    pid = require_player_id()
+    if not pid:
+        return
+
+    entity_id = data.get("entityId")
+    entity_slot_index = data.get("slotIndex")
+    x = data.get("x")
+    y = data.get("y")
+
+    if entity_id is None or entity_slot_index is None or x is None or y is None:
+        return
+
+    try:
+        x = float(x)
+        y = float(y)
+        entity_slot_index = int(entity_slot_index)
+    except (TypeError, ValueError):
+        return
+
+    if find_world_collision(x, y, GROUND_ITEM_COLLISION_PAD):
+        socketio.emit("server_debug", {"msg": "entity_drop_item blocked: collision"}, to=request.sid)
+        return
+
+    # Find the entity
+    entity = next((o for o in map_objects if o.get("id") == entity_id), None)
+    if entity is None:
+        return
+
+    slots = entity.get("itemSlots") or []
+    if not (0 <= entity_slot_index < len(slots)):
+        return
+
+    item = slots[entity_slot_index]
+    if not item:
+        return
+
+    # Remove from slot
+    slots[entity_slot_index] = None
+    entity["itemSlots"] = slots
+
+    # Create ground item or map item depending on whether it has an itemTile
+    stats_snapshot = normalize_item_stats(item)
+    item_tile = stats_snapshot.get("itemTile")
+
+    if item_tile:
+        # Create a map object item
+        map_item = {
+            "id": str(uuid.uuid4()),
+            "type": "tile",
+            "kind": "item",
+            "x": x,
+            "y": y,
+            "meta": {
+                "entity": True,
+                "title": stats_snapshot["name"],
+                "bio": "An item that can be picked up",
+                "actions": [],
+                "collides": False,
+                "w": 64,
+                "h": 64,
+                "itemTile": item_tile,
+                "itemStats": stats_snapshot
+            }
+        }
+        map_objects.append(map_item)
+        save_map()
+        socketio.emit("map_objects", map_objects)
+    else:
+        # Create a ground item
+        gi = {
+            "id": str(uuid.uuid4()),
+            "name": stats_snapshot["name"],
+            "bonus": stats_snapshot["bonus"],
+            "attack": stats_snapshot["attack"],
+            "defense": stats_snapshot["defense"],
+            "x": x,
+            "y": y,
+            "itemStats": stats_snapshot
+        }
+        ground_items.append(gi)
+        socketio.emit("ground_items", ground_items)
+        with ground_lock:
+            save_ground()
+
 
 @socketio.on("connect")
 def on_connect():
@@ -931,6 +1197,16 @@ def on_drop_item(data):
     if not item:
         return
 
+    try:
+        x = float(x)
+        y = float(y)
+    except (TypeError, ValueError):
+        return
+
+    if find_world_collision(x, y, GROUND_ITEM_COLLISION_PAD):
+        socketio.emit("server_debug", {"msg": "drop_item blocked: collision"}, to=request.sid)
+        return
+
     # remove item from unit
     slots[slot_index] = None
     u["itemSlots"] = slots
@@ -938,22 +1214,46 @@ def on_drop_item(data):
     # Recompute stats after unequip
     apply_unit_stats(u, owner_sid=pid, broadcast_hp=True)
 
-    # create ground item
-    gi = {
-        "id": str(uuid.uuid4()),
-        "name": item.get("name", "item"),
-        "bonus": item.get("bonus", 0),
-        "x": float(x),
-        "y": float(y)
-    }
-    ground_items.append(gi)
+    stats_snapshot = normalize_item_stats(item)
+    item_tile = stats_snapshot.get("itemTile")
 
-    # everyone sees it
-    socketio.emit("ground_items", ground_items)
-
-    # persist ground items
-    with ground_lock:
-        save_ground()
+    if item_tile:
+        map_item = {
+            "id": str(uuid.uuid4()),
+            "type": "tile",
+            "kind": "item",
+            "x": x,
+            "y": y,
+            "meta": {
+                "entity": True,
+                "title": stats_snapshot["name"],
+                "bio": "An item that can be picked up",
+                "actions": [],
+                "collides": False,
+                "w": 64,
+                "h": 64,
+                "itemTile": item_tile,
+                "itemStats": stats_snapshot
+            }
+        }
+        map_objects.append(map_item)
+        save_map()
+        socketio.emit("map_objects", map_objects)
+    else:
+        gi = {
+            "id": str(uuid.uuid4()),
+            "name": stats_snapshot["name"],
+            "bonus": stats_snapshot["bonus"],
+            "attack": stats_snapshot["attack"],
+            "defense": stats_snapshot["defense"],
+            "x": x,
+            "y": y,
+            "itemStats": stats_snapshot
+        }
+        ground_items.append(gi)
+        socketio.emit("ground_items", ground_items)
+        with ground_lock:
+            save_ground()
 
     # only the owner needs equipment UI refresh
     socketio.emit("unit_slots_update", {"unitId": unit_id, "itemSlots": slots}, to=request.sid)
@@ -1005,11 +1305,7 @@ def on_pickup_item(data):
         save_ground()
 
     # equip
-    slots[slot_index] = {
-        "id": str(uuid.uuid4()),
-        "name": gi.get("name", "item"),
-        "bonus": gi.get("bonus", 0)
-    }
+    slots[slot_index] = slot_payload_from_source(gi)
     u["itemSlots"] = slots
 
     # Recompute stats after equip
@@ -1026,6 +1322,54 @@ def on_pickup_item(data):
         save_ground()
 
     # ✅ optional but recommended: hard-sync state so late-joiners / state-only clients match
+    emit_state()
+
+
+@socketio.on("pickup_map_item")
+def on_pickup_map_item(data):
+    pid = require_player_id()
+    if not pid:
+        return
+
+    unit_id = data.get("unitId")
+    slot_index = data.get("slotIndex")
+    map_item_id = data.get("mapObjectItemId")
+
+    if unit_id is None or slot_index is None or map_item_id is None:
+        return
+
+    u = find_unit(pid, unit_id)
+    if not u:
+        return
+
+    slots = u.get("itemSlots") or [None, None, None, None, None]
+    slot_index = int(slot_index)
+    if slot_index < 0 or slot_index >= len(slots):
+        return
+    if slots[slot_index] is not None:
+        return
+
+    obj_index = next((i for i, o in enumerate(map_objects) if o.get("id") == map_item_id), None)
+    if obj_index is None:
+        return
+
+    obj = map_objects[obj_index]
+    if obj.get("kind") != "item":
+        return
+
+    if dist_xy(u["x"], u["y"], obj.get("x", 0), obj.get("y", 0)) > PICKUP_DISTANCE:
+        return
+
+    map_objects.pop(obj_index)
+    save_map()
+    socketio.emit("map_objects", map_objects)
+
+    slots[slot_index] = slot_payload_from_source(obj)
+    u["itemSlots"] = slots
+
+    apply_unit_stats(u, owner_sid=pid, broadcast_hp=True)
+
+    socketio.emit("unit_slots_update", {"unitId": unit_id, "itemSlots": slots}, to=request.sid)
     emit_state()
 
 
@@ -1343,12 +1687,8 @@ def handle_ground_give_to_entity(data):
             socketio.emit("server_debug", {"msg": "ground_give_to_entity: entity slot occupied"}, to=request.sid)
             return
 
-        # transfer ground item into entity slot, preserving any upgrade bonus
-        eslots[entity_slot_index] = {
-            "id": str(uuid.uuid4()),
-            "name": gi.get("name"),
-            "bonus": gi.get("bonus", 0)
-        }
+        # transfer ground item into entity slot, preserving stats + tile metadata
+        eslots[entity_slot_index] = slot_payload_from_source(gi)
         ent["itemSlots"] = eslots
 
     # remove ground item
@@ -1364,8 +1704,63 @@ def handle_ground_give_to_entity(data):
     socketio.emit("server_debug", {"msg": "ground_give_to_entity: transfer success"}, to=request.sid)
 
     # notify clients
-    socketio.emit("map_objects", map_objects)
     socketio.emit("ground_items", ground_items)
+
+
+@socketio.on("map_item_give_to_entity")
+def handle_map_item_give_to_entity(data):
+    pid = require_player_id()
+    if not pid:
+        return
+
+    entity_id = data.get("entityId")
+    try:
+        entity_slot_index = int(data.get("entitySlotIndex", -1))
+    except Exception:
+        entity_slot_index = -1
+    map_item_id = data.get("mapObjectItemId")
+
+    if not entity_id or entity_slot_index < 0 or not map_item_id:
+        print(f"[map_item_give_to_entity] invalid args: entity_id={entity_id} slot={entity_slot_index} map_item_id={map_item_id}", flush=True)
+        socketio.emit("server_debug", {"msg": "map_item_give_to_entity: invalid args"}, to=request.sid)
+        return
+
+    with map_lock:
+        ent = next((m for m in map_objects if m.get("id") == entity_id), None)
+        if not ent:
+            print(f"[map_item_give_to_entity] entity not found: {entity_id}", flush=True)
+            socketio.emit("server_debug", {"msg": "map_item_give_to_entity: entity not found"}, to=request.sid)
+            return
+
+        eslots = ent.get("itemSlots") or []
+        if entity_slot_index >= len(eslots):
+            eslots += [None] * (entity_slot_index + 1 - len(eslots))
+        if eslots[entity_slot_index] is not None:
+            print(f"[map_item_give_to_entity] entity slot occupied: {entity_slot_index}", flush=True)
+            socketio.emit("server_debug", {"msg": "map_item_give_to_entity: entity slot occupied"}, to=request.sid)
+            return
+
+        item_index = next((i for i, obj in enumerate(map_objects) if obj.get("id") == map_item_id), None)
+        if item_index is None:
+            print(f"[map_item_give_to_entity] map item not found: {map_item_id}", flush=True)
+            socketio.emit("server_debug", {"msg": "map_item_give_to_entity: map item not found"}, to=request.sid)
+            return
+
+        map_item = map_objects[item_index]
+        if map_item.get("kind") != "item":
+            print(f"[map_item_give_to_entity] object is not an item: {map_item_id}", flush=True)
+            socketio.emit("server_debug", {"msg": "map_item_give_to_entity: object is not an item"}, to=request.sid)
+            return
+
+        eslots[entity_slot_index] = slot_payload_from_source(map_item)
+        ent["itemSlots"] = eslots
+
+        map_objects.pop(item_index)
+        save_map()
+
+    print(f"[map_item_give_to_entity] success: map_item {map_item_id} -> entity {entity_id} slot {entity_slot_index}", flush=True)
+    socketio.emit("server_debug", {"msg": "map_item_give_to_entity: transfer success"}, to=request.sid)
+    socketio.emit("map_objects", map_objects)
 
 
 @socketio.on("smith_upgrade_item")
@@ -1482,11 +1877,7 @@ def handle_entity_give_to_unit(data):
         if unit_slot_index >= len(uslots): return
         if uslots[unit_slot_index] is not None: return
         # transfer
-        uslots[unit_slot_index] = {
-            "id": str(uuid.uuid4()),
-            "name": item.get("name"),
-            "bonus": item.get("bonus", 0)
-        }
+        uslots[unit_slot_index] = slot_payload_from_source(item)
         u["itemSlots"] = uslots
         eslots[entity_slot_index] = None
         ent["itemSlots"] = eslots
@@ -1495,6 +1886,59 @@ def handle_entity_give_to_unit(data):
     # notify clients
     socketio.emit("map_objects", map_objects)
     socketio.emit("unit_slots_update", {"unitId": unit_id, "itemSlots": uslots}, to=request.sid)
+
+
+@socketio.on("entity_give_to_entity")
+def handle_entity_give_to_entity(data):
+    pid = require_player_id()
+    if not pid:
+        return
+
+    src_id = data.get("fromEntityId")
+    dst_id = data.get("toEntityId")
+    try:
+        src_slot = int(data.get("fromSlotIndex", -1))
+    except Exception:
+        src_slot = -1
+    try:
+        dst_slot = int(data.get("toSlotIndex", -1))
+    except Exception:
+        dst_slot = -1
+
+    if not src_id or not dst_id or src_slot < 0 or dst_slot < 0:
+        socketio.emit("server_debug", {"msg": "entity_give_to_entity: invalid args"}, to=request.sid)
+        return
+
+    with map_lock:
+        src = next((m for m in map_objects if m.get("id") == src_id), None)
+        dst = next((m for m in map_objects if m.get("id") == dst_id), None)
+        if not src or not dst:
+            socketio.emit("server_debug", {"msg": "entity_give_to_entity: entity not found"}, to=request.sid)
+            return
+
+        src_slots = src.get("itemSlots") or []
+        if src_slot >= len(src_slots):
+            socketio.emit("server_debug", {"msg": "entity_give_to_entity: source slot out of range"}, to=request.sid)
+            return
+        item = src_slots[src_slot]
+        if not item:
+            socketio.emit("server_debug", {"msg": "entity_give_to_entity: no item in source slot"}, to=request.sid)
+            return
+
+        dst_slots = dst.get("itemSlots") or []
+        if dst_slot >= len(dst_slots):
+            dst_slots += [None] * (dst_slot + 1 - len(dst_slots))
+        if dst_slots[dst_slot] is not None:
+            socketio.emit("server_debug", {"msg": "entity_give_to_entity: destination slot occupied"}, to=request.sid)
+            return
+
+        src_slots[src_slot] = None
+        dst_slots[dst_slot] = item
+        src["itemSlots"] = src_slots
+        dst["itemSlots"] = dst_slots
+        save_map()
+
+    socketio.emit("map_objects", map_objects)
 
 
 @socketio.on("entity_give_to_ground")
@@ -1515,6 +1959,7 @@ def handle_entity_give_to_ground(data):
         socketio.emit("server_debug", {"msg": "entity_give_to_ground: invalid args"}, to=request.sid)
         return
 
+    created_map_item = None
     with map_lock:
         ent = next((m for m in map_objects if m.get("id") == entity_id), None)
         if not ent:
@@ -1536,21 +1981,53 @@ def handle_entity_give_to_ground(data):
         eslots[entity_slot_index] = None
         ent["itemSlots"] = eslots
 
-    # create ground item at provided coords
+        stats = normalize_item_stats(item, fallback_name="Item")
+        item_tile = stats.get("itemTile")
+        if item_tile:
+            created_map_item = {
+                "id": str(uuid.uuid4()),
+                "type": "tile",
+                "kind": "item",
+                "x": float(x),
+                "y": float(y),
+                "meta": {
+                    "entity": True,
+                    "title": stats["name"],
+                    "bio": "An item that can be picked up",
+                    "actions": [],
+                    "collides": False,
+                    "w": 64,
+                    "h": 64,
+                    "itemTile": item_tile,
+                    "itemStats": stats
+                }
+            }
+            map_objects.append(created_map_item)
+
+        save_map()
+
+    if created_map_item:
+        print(f"[entity_give_to_ground] success: entity {entity_id} slot {entity_slot_index} -> map_item {created_map_item['id']}", flush=True)
+        socketio.emit("server_debug", {"msg": "entity_give_to_ground: spawned tile item"}, to=request.sid)
+        socketio.emit("map_objects", map_objects)
+        return
+
+    # create standard ground item at provided coords
     gi = {
         "id": str(uuid.uuid4()),
-        "name": item.get("name", "item"),
-        "bonus": item.get("bonus", 0),
+        "name": stats.get("name"),
+        "bonus": stats.get("bonus"),
+        "attack": stats.get("attack"),
+        "defense": stats.get("defense"),
         "x": float(x),
-        "y": float(y)
+        "y": float(y),
+        "itemStats": stats
     }
     ground_items.append(gi)
 
     # persist
     with ground_lock:
         save_ground()
-    with map_lock:
-        save_map()
 
     print(f"[entity_give_to_ground] success: entity {entity_id} slot {entity_slot_index} -> ground {gi['id']}", flush=True)
     socketio.emit("server_debug", {"msg": "entity_give_to_ground: transfer success"}, to=request.sid)
@@ -1647,7 +2124,7 @@ def mine_production_loop():
 
 def npc_movement_loop():
     """Background task that moves NPCs along their waypoint paths."""
-    NPC_SPEED = 1.0  # pixels per tick (reduced for slower walk)
+    NPC_SPEED = 1.4  # pixels per tick (~150 pixels/sec at 60 FPS)
     SPIDER_ATTACK_RANGE = 200  # pixels
     SPIDER_RETURN_RANGE = 400  # pixels - return to waypoints if target is this far
     tick_count = 0
@@ -1720,6 +2197,9 @@ def npc_movement_loop():
                     tx = target_player["unit"]["x"]
                     ty = target_player["unit"]["y"]
                     
+                    # Store target for client to use
+                    m["targetWaypoint"] = {"x": tx, "y": ty}
+                    
                     dx = tx - o["x"]
                     dy = ty - o["y"]
                     dist = math.hypot(dx, dy)
@@ -1729,7 +2209,6 @@ def npc_movement_loop():
                         new_x = o["x"] + (dx / dist) * NPC_SPEED
                         new_y = o["y"] + (dy / dist) * NPC_SPEED
                         
-                        # Only move if not colliding
                         if not check_collision(new_x, new_y, o.get("id")):
                             o["x"] = new_x
                             o["y"] = new_y
@@ -1753,70 +2232,53 @@ def npc_movement_loop():
                     target_wp = waypoints[current_idx]
                     tx, ty = target_wp["x"], target_wp["y"]
                     
-                    # Move towards target
+                    # Always store target waypoint for client
+                    m["targetWaypoint"] = {"x": tx, "y": ty}
+                    
+                    # Move server position toward target (for distance calculation)
                     dx = tx - o["x"]
                     dy = ty - o["y"]
                     dist = math.hypot(dx, dy)
-
-                    # Single-waypoint NPCs should idle at their spot
-                    if len(waypoints) == 1:
-                        m["currentWaypointIndex"] = 0
-                        if dist < NPC_SPEED:
-                            if o["x"] != tx or o["y"] != ty:
-                                o["x"], o["y"] = tx, ty
-                                changed = True
-                            m["anim"] = "idle"
-                        else:
-                            new_x = o["x"] + (dx / dist) * NPC_SPEED
-                            new_y = o["y"] + (dy / dist) * NPC_SPEED
-                            if not check_collision(new_x, new_y, o.get("id")):
-                                o["x"], o["y"] = new_x, new_y
-                                changed = True
-                            m["anim"] = "walk"
-                        continue
                     
-                    if dist < NPC_SPEED:
-                        # Reached waypoint, move to next
-                        o["x"] = tx
-                        o["y"] = ty
-                        m["currentWaypointIndex"] = (current_idx + 1) % len(waypoints)
-                        changed = True
+                    # Single waypoint NPCs should always be idle
+                    if len(waypoints) == 1:
+                        m["anim"] = "idle"
+                        if dist > 5:  # If far from waypoint, move toward it
+                            move_dist = min(NPC_SPEED, dist)
+                            o["x"] += (dx / dist) * move_dist
+                            o["y"] += (dy / dist) * move_dist
+                            changed = True
                     else:
-                        # Move towards waypoint with collision checking
-                        new_x = o["x"] + (dx / dist) * NPC_SPEED
-                        new_y = o["y"] + (dy / dist) * NPC_SPEED
+                        # Multi-waypoint NPCs walk between waypoints
+                        m["anim"] = "walk"
                         
-                        # Only move if not colliding
-                        if not check_collision(new_x, new_y, o.get("id")):
-                            o["x"] = new_x
-                            o["y"] = new_y
+                        # Move toward waypoint
+                        if dist < 5:  # Reached waypoint, advance to next
+                            m["currentWaypointIndex"] = (current_idx + 1) % len(waypoints)
+                            o["x"] = tx
+                            o["y"] = ty
                             changed = True
                         else:
-                            # Try to slide around obstacle
-                            # Try moving only in X direction
-                            if not check_collision(new_x, o["y"], o.get("id")):
-                                o["x"] = new_x
-                                changed = True
-                            # Try moving only in Y direction
-                            elif not check_collision(o["x"], new_y, o.get("id")):
-                                o["y"] = new_y
-                                changed = True
-                    
-                    # Update direction for animation (match client getDirKey logic)
+                            # Move toward current waypoint
+                            move_dist = min(NPC_SPEED, dist)
+                            o["x"] += (dx / dist) * move_dist
+                            o["y"] += (dy / dist) * move_dist
+                            changed = True
+                        
+                    # Update direction toward target
                     if dist > 0.1:
-                        # Match client: atan2(dy, dx) * 180/PI + 90
                         angle_deg = (math.degrees(math.atan2(dy, dx)) + 90) % 360
-                        # Snap to nearest direction (16 directions)
                         directions = [0, 22, 45, 67, 90, 112, 135, 157, 180, 202, 225, 247, 270, 292, 315, 337]
                         closest_dir = min(directions, key=lambda d: min(abs(angle_deg - d), abs(angle_deg - d + 360), abs(angle_deg - d - 360)))
                         m["dir"] = str(closest_dir).zfill(3)
-                        m["anim"] = "walk"
-                    else:
-                        m["anim"] = "idle"
             
             # Log NPC count periodically
             if tick_count % 600 == 0 and npc_count > 0:  # Every 10 seconds
                 print(f"[NPC_LOOP] Tick {tick_count}: {npc_count} NPCs active", flush=True)
+            
+            # Always broadcast NPC state periodically for new clients
+            if tick_count % 60 == 0:  # Every ~1 second
+                socketio.emit("map_objects", map_objects)
             
             if changed:
                 # Save periodically (every 60 ticks / 1 second)
@@ -1826,9 +2288,9 @@ def npc_movement_loop():
                 
                 if npc_movement_loop._tick_counter % 60 == 0:
                     save_map()
-        
-        if changed:
-            socketio.emit("map_objects", map_objects)
+                
+                # Broadcast waypoint changes immediately
+                socketio.emit("map_objects", map_objects)
 
 # Run server
 if __name__ == "__main__":

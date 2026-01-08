@@ -358,6 +358,28 @@
       </div>
   </div>
 
+  <div id="itemTilePicker" style="
+    display:none;
+    position:fixed;
+    left:50%;
+    top:50%;
+    transform:translate(-50%, -50%);
+    width:560px;
+    height:400px;
+    background:rgba(0,0,0,0.95);
+    border:2px solid #888;
+    border-radius:8px;
+    padding:16px;
+    z-index:3000;
+    overflow:auto;
+  ">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+      <div style="color:white; font-weight:bold;">Select Item Tile</div>
+      <button id="itemPickerCloseBtn" style="height:26px; padding:0 12px;">Close</button>
+    </div>
+    <canvas id="itemTileCanvas" style="cursor:pointer; image-rendering:pixelated; border:1px solid #555;"></canvas>
+  </div>
+
   <div id="editorPanel" style="
     position:fixed;
     right:10px;
@@ -395,9 +417,13 @@
       Shift+Scroll: tile size <br/>
       Ctrl+Click: select to change position<br/>
       Alt+Click (NPC/Spider selected): add/move waypoint | Shift+Alt+Click: remove waypoint<br/>
+      Shift+Arrow-Keys: collision position <br/>
     </div>
     <button id="entityBtn" style="width:100%; height:36px; margin-top:8px;">
     Entity: OFF
+  </button>
+  <button id="createItemBtn" style="width:100%; height:36px; margin-top:8px; background:#336; color:white; border:1px solid #55a; cursor:pointer;">
+    Create Item
   </button>
   </div>
   </div>
@@ -463,6 +489,30 @@
     <div style="margin-top:10px;">
       <div style="font-size:12px; opacity:0.8;">Items</div>
       <ul id="entity-items-list" style="margin-top:6px; list-style:none; padding:0;"></ul>
+    </div>
+
+    <div id="itemStatsSection" style="margin-top:10px; display:none;">
+      <div style="font-size:14px; font-weight:bold; margin-bottom:8px;">Item Stats</div>
+      
+      <div style="margin-top:8px;">
+        <div style="font-size:12px; opacity:0.8;">Item Name</div>
+        <input id="itemNameInput" style="width:100%; height:30px;" placeholder="Item" />
+      </div>
+      
+      <div style="margin-top:8px;">
+        <div style="font-size:12px; opacity:0.8;">Attack Bonus</div>
+        <input id="itemAttackInput" type="number" style="width:100%; height:30px;" placeholder="0" />
+      </div>
+      
+      <div style="margin-top:8px;">
+        <div style="font-size:12px; opacity:0.8;">Defense Bonus</div>
+        <input id="itemDefenseInput" type="number" style="width:100%; height:30px;" placeholder="0" />
+      </div>
+      
+      <div style="margin-top:8px;">
+        <div style="font-size:12px; opacity:0.8;">Other Bonus</div>
+        <input id="itemBonusInput" type="number" style="width:100%; height:30px;" placeholder="0" />
+      </div>
     </div>
 
     <div style="margin-top:10px;">
@@ -664,6 +714,7 @@
   <script src="static/draw.js"></script>
   <script src="static/billboard.js"></script>
   <script src="static/editor.js"></script>
+  <script src="static/item-picker.js"></script>
 
   <script>
   // ===== QUEST PARSING =====
@@ -963,7 +1014,7 @@
       li.title = hoverText;
       li.appendChild(left);
 
-      // Allow dropping from ground -> slot OR slot -> slot
+      // Allow dropping from entity/unit slots via native drag
       li.addEventListener("dragover", (e) => {
         e.preventDefault();
         li.style.outline = "2px dashed #fff";
@@ -983,41 +1034,36 @@
         try { payload = JSON.parse(payloadStr); } catch { return; }
 
         const targetUnit = myUnits.find(u => u.id === unit.id);
-        if (!targetUnit) return;
+        if (!targetUnit) {
+          return;
+        }
         if (!targetUnit.itemSlots) targetUnit.itemSlots = [null, null, null, null, null];
 
         const slotIndex = i;
 
-    if (payload.type === "ground_item") {
-      socket.emit("pickup_item", {
-        unitId: unit.id,
-        slotIndex: i,
-        groundItemId: payload.groundItemId
-      });
-      // Optimistic local update: remove ground item and add to unit slot
-      try {
-        const giIndexLocal = groundItems.findIndex(g => g.id === payload.groundItemId);
-        if (giIndexLocal !== -1) groundItems.splice(giIndexLocal, 1);
-        unit.itemSlots = unit.itemSlots || [];
-        unit.itemSlots[i] = { id: ("local-" + (payload.groundItemId || Math.random())), name: (payload.name || "item") };
-        if (currentItemsUnitId === unit.id) renderUnitItems(unit);
-      } catch (ex) { console.error("optimistic pickup_item failed", ex); }
-      return;
-    }
-
-        // If dropping an entity item onto a unit slot
         if (payload.type === "entity_item") {
-          // payload: { type: 'entity_item', entityId, slotIndex, item }
+          if (targetUnit.itemSlots[slotIndex]) return;
           socket.emit("entity_give_to_unit", {
             entityId: payload.entityId,
             entitySlotIndex: payload.slotIndex,
             unitId: unit.id,
-            slotIndex: i
+            slotIndex
           });
+          try {
+            const ent = mapObjects.find(m => m.id === payload.entityId);
+            if (ent && ent.itemSlots && ent.itemSlots[payload.slotIndex]) {
+              const moving = ent.itemSlots[payload.slotIndex];
+              ent.itemSlots[payload.slotIndex] = null;
+              targetUnit.itemSlots[slotIndex] = moving;
+              if (currentItemsUnitId === targetUnit.id) renderUnitItems(targetUnit);
+              if (selectedEntityId === payload.entityId) openEntityInspector(ent);
+            }
+          } catch (ex) {
+            console.error("optimistic entity->unit failed", ex);
+          }
           return;
         }
 
-        // If dropping a unit item (slot -> slot) (optional nice feature):
         if (payload.type === "unit_item") {
           const fromUnit = myUnits.find(u => u.id === payload.unitId);
           if (!fromUnit || !fromUnit.itemSlots) return;
@@ -1026,12 +1072,12 @@
           const moving = fromUnit.itemSlots[fromSlot];
           if (!moving) return;
 
-          // If target slot occupied, swap
           const temp = targetUnit.itemSlots[slotIndex];
           targetUnit.itemSlots[slotIndex] = moving;
           fromUnit.itemSlots[fromSlot] = temp || null;
 
-          renderUnitItems(targetUnit);
+          if (currentItemsUnitId === targetUnit.id) renderUnitItems(targetUnit);
+          if (currentItemsUnitId === fromUnit.id && fromUnit.id !== targetUnit.id) renderUnitItems(fromUnit);
           return;
         }
       });
@@ -1050,6 +1096,7 @@
         chip.draggable = true;
 
         chip.addEventListener("dragstart", (e) => {
+          console.log("Dragging unit item:", slot, "from slot", i);
           const payload = {
             type: "unit_item",
             unitId: unit.id,
@@ -1061,70 +1108,22 @@
         });
 
         li.appendChild(chip);
+      } else {
+        console.log("Slot", i, "is empty, no drag chip created");
       }
 
       itemsList.appendChild(li);
+    }
+
+    if (typeof window.invalidateSlotHighlightables === "function") {
+      window.invalidateSlotHighlightables();
     }
   }
 
 
 
 
-  canvas.addEventListener("dragover", (e) => {
-    e.preventDefault(); // allow drop
-  });
-
-  canvas.addEventListener("drop", (e) => {
-    e.preventDefault();
-
-    const payloadStr = e.dataTransfer.getData("application/json");
-    if (!payloadStr) return;
-
-    let payload;
-    try { payload = JSON.parse(payloadStr); } catch { return; }
-
-    // Convert screen -> world
-    const wx = camera.x + e.clientX - canvas.width / 2;
-    const wy = camera.y + e.clientY - canvas.height / 2;
-
-    // Dropping equipment item onto world => SERVER creates ground item
-    if (payload.type === "unit_item") {
-      socket.emit("drop_item", {
-        unitId: payload.unitId,
-        slotIndex: payload.slotIndex,
-        x: wx,
-        y: wy
-      });
-      return;
-    }
-    // Dropping an item from an entity onto the world -> create ground item
-    if (payload.type === "entity_item") {
-      console.log('canvas drop: entity_item', { payload, socketConnected: socket && socket.connected, wx, wy });
-      // optimistic: remove from entity UI and add local ground item for immediate feedback
-      try {
-        const ent = (mapObjects || []).find(m => m.id === payload.entityId);
-        let itemName = null;
-        if (ent && ent.itemSlots && ent.itemSlots[payload.slotIndex]) {
-          const it = ent.itemSlots[payload.slotIndex];
-          itemName = it && it.name;
-          ent.itemSlots[payload.slotIndex] = null;
-          if (selectedEntityId === ent.id) openEntityInspector(ent);
-        }
-        const localGi = { id: 'local-' + (Date.now() + Math.floor(Math.random()*1000)), name: itemName || 'item', x: wx, y: wy };
-        groundItems = groundItems || [];
-        groundItems.push(localGi);
-      } catch (ex) { console.error('optimistic entity->ground failed', ex); }
-
-      socket.emit("entity_give_to_ground", {
-        entityId: payload.entityId,
-        entitySlotIndex: payload.slotIndex,
-        x: wx,
-        y: wy
-      });
-
-      return;
-    }
-  });
+  <!-- Canvas drop/dragover is handled in static/input.js. Removed duplicate handlers here. -->
 
 
 
@@ -1135,6 +1134,20 @@
     if (typeof o.meta.title !== "string") o.meta.title = "";
     if (typeof o.meta.bio !== "string") o.meta.bio = "";
     if (!Array.isArray(o.meta.actions)) o.meta.actions = [];
+    if (o.kind === 'item') {
+      const stats = (o.meta.itemStats && typeof o.meta.itemStats === 'object') ? o.meta.itemStats : {};
+      o.meta.itemStats = stats;
+      const fallbackTitle = (typeof o.meta.title === 'string' && o.meta.title.trim()) ? o.meta.title : getDefaultEntityTitle(o);
+      if (typeof stats.name !== 'string' || !stats.name.trim()) {
+        stats.name = fallbackTitle || 'Item';
+      }
+      const atk = Number(stats.attack);
+      const def = Number(stats.defense);
+      const bonus = Number(stats.bonus);
+      stats.attack = Number.isFinite(atk) ? atk : 0;
+      stats.defense = Number.isFinite(def) ? def : 0;
+      stats.bonus = Number.isFinite(bonus) ? bonus : 0;
+    }
   }
 
   function getDefaultEntityTitle(o) {
@@ -1176,6 +1189,27 @@
     const questToggle = document.getElementById("entityQuestToggle");
     if (questToggle) {
       questToggle.checked = !!o.meta.givesQuest;
+    }
+    
+    // Show/hide and populate item stats section
+    const itemStatsSection = document.getElementById("itemStatsSection");
+    if (itemStatsSection) {
+      if (o.kind === 'item' && o.meta?.itemStats) {
+        itemStatsSection.style.display = 'block';
+        
+        // Populate item stat inputs
+        const itemNameInput = document.getElementById("itemNameInput");
+        const itemAttackInput = document.getElementById("itemAttackInput");
+        const itemDefenseInput = document.getElementById("itemDefenseInput");
+        const itemBonusInput = document.getElementById("itemBonusInput");
+        
+        if (itemNameInput) itemNameInput.value = o.meta.itemStats.name || 'Item';
+        if (itemAttackInput) itemAttackInput.value = o.meta.itemStats.attack || 0;
+        if (itemDefenseInput) itemDefenseInput.value = o.meta.itemStats.defense || 0;
+        if (itemBonusInput) itemBonusInput.value = o.meta.itemStats.bonus || 0;
+      } else {
+        itemStatsSection.style.display = 'none';
+      }
     }
 
     renderEntityActions(o);
@@ -1233,6 +1267,70 @@
       const slots = o.itemSlots || [];
       const slotCount = Math.max(2, slots.length);
 
+      const handleEntitySlotDrop = (slotIndex, payload) => {
+        if (!payload || slotIndex < 0) return false;
+        console.log("entity-slot drop", { entityId: o.id, slotIndex, payload });
+
+        if (payload.type === "unit_item") {
+          socket.emit("unit_give_to_entity", {
+            unitId: payload.unitId,
+            unitSlotIndex: payload.slotIndex,
+            entityId: o.id,
+            entitySlotIndex: slotIndex
+          });
+          return true;
+        }
+
+        if (payload.type === "entity_item") {
+          socket.emit("entity_give_to_entity", {
+            fromEntityId: payload.entityId,
+            fromSlotIndex: payload.slotIndex,
+            toEntityId: o.id,
+            toSlotIndex: slotIndex
+          });
+          try {
+            const fromEntity = mapObjects.find(m => m.id === payload.entityId);
+            const toEntity = mapObjects.find(m => m.id === o.id);
+            if (fromEntity && toEntity) {
+              fromEntity.itemSlots = fromEntity.itemSlots || [];
+              toEntity.itemSlots = toEntity.itemSlots || [];
+              while (toEntity.itemSlots.length <= slotIndex) toEntity.itemSlots.push(null);
+              const moving = fromEntity.itemSlots[payload.slotIndex] || payload.item;
+              if (moving && !toEntity.itemSlots[slotIndex]) {
+                fromEntity.itemSlots[payload.slotIndex] = null;
+                toEntity.itemSlots[slotIndex] = moving;
+              }
+              if (selectedEntityId === fromEntity.id) openEntityInspector(fromEntity);
+              if (selectedEntityId === toEntity.id) openEntityInspector(toEntity);
+            }
+          } catch (ex) {
+            console.error("optimistic entity->entity move failed", ex);
+          }
+          return true;
+        }
+
+        return false;
+      };
+
+      const findClosestEntitySlot = (clientX, clientY) => {
+        const lis = entityItemsEl.querySelectorAll("li[data-slot-index]");
+        let best = null;
+        let bestDist = Infinity;
+        lis.forEach((li) => {
+          const rect = li.getBoundingClientRect();
+          const cx = (rect.left + rect.right) / 2;
+          const cy = (rect.top + rect.bottom) / 2;
+          const dx = clientX - cx;
+          const dy = clientY - cy;
+          const dist = Math.hypot(dx, dy);
+          if (dist < bestDist) {
+            bestDist = dist;
+            best = li;
+          }
+        });
+        return best;
+      };
+
       // container that will wrap slot elements (prevents vertical stacking)
       const slotsContainer = document.createElement("div");
       slotsContainer.style.display = "flex";
@@ -1288,24 +1386,17 @@
           li.appendChild(left);
         }
 
-        // allow dropping unit_item onto entity slot
-        li.addEventListener("dragover", (e) => { e.preventDefault(); li.style.outline = "2px dashed #fff"; });
+        // allow dropping unit/entity items onto entity slot
+        li.addEventListener("dragover", (e) => { e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = "move"; li.style.outline = "2px dashed #fff"; });
         li.addEventListener("dragleave", () => { li.style.outline = ""; });
         li.addEventListener("drop", (e) => {
-          e.preventDefault(); li.style.outline = "";
+          e.preventDefault();
+          e.stopPropagation();
+          li.style.outline = "";
           const payloadStr = e.dataTransfer.getData("application/json");
           if (!payloadStr) return;
           let payload; try { payload = JSON.parse(payloadStr); } catch { return; }
-          // dropping a unit item onto entity
-          console.log("entity-slot drop", { entityId: o.id, slotIndex: si, payload });
-          if (payload.type === "unit_item") {
-            socket.emit("unit_give_to_entity", {
-              unitId: payload.unitId,
-              unitSlotIndex: payload.slotIndex,
-              entityId: o.id,
-              entitySlotIndex: si
-            });
-          }
+          handleEntitySlotDrop(si, payload);
         });
 
         // if slot has item, make draggable
@@ -1330,6 +1421,39 @@
       }
       // append the wrapped slots container once
       entityItemsEl.appendChild(slotsContainer);
+
+      if (entityItemsEl._dropFallback) {
+        entityItemsEl.removeEventListener("drop", entityItemsEl._dropFallback);
+      }
+      if (entityItemsEl._dragoverFallback) {
+        entityItemsEl.removeEventListener("dragover", entityItemsEl._dragoverFallback);
+      }
+
+      const containerDragover = (e) => {
+        e.preventDefault();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+      };
+
+      const containerDrop = (e) => {
+        const payloadStr = e.dataTransfer.getData("application/json");
+        if (!payloadStr) return;
+        let payload; try { payload = JSON.parse(payloadStr); } catch { return; }
+        let targetLi = e.target.closest && e.target.closest("li[data-slot-index]");
+        if (!targetLi) targetLi = findClosestEntitySlot(e.clientX, e.clientY);
+        if (!targetLi) return;
+        const idx = parseInt(targetLi.dataset.slotIndex, 10);
+        if (Number.isNaN(idx)) return;
+        if (handleEntitySlotDrop(idx, payload)) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+      };
+
+      entityItemsEl.addEventListener("dragover", containerDragover);
+      entityItemsEl.addEventListener("drop", containerDrop);
+      entityItemsEl._dragoverFallback = containerDragover;
+      entityItemsEl._dropFallback = containerDrop;
+      if (typeof window.invalidateSlotHighlightables === "function") window.invalidateSlotHighlightables();
     }
 
       // Render Abilities
@@ -1571,8 +1695,8 @@
     }
 
     ensureEntityMeta(o);
-    o.meta.title = entityTitleInput.value || "";
-    o.meta.bio = entityBioInput.value || "";
+    let newTitle = (entityTitleInput.value || "").trim();
+    o.meta.bio = (entityBioInput.value || "").trim();
     
     // Save z-order
     const zOrderInput = document.getElementById("entityZOrderInput");
@@ -1585,6 +1709,39 @@
     if (questToggle) {
       o.meta.givesQuest = !!questToggle.checked;
     }
+    
+    // Save item stats if this is an item
+    if (o.kind === 'item' && o.meta?.itemStats) {
+      const itemNameInput = document.getElementById("itemNameInput");
+      const itemAttackInput = document.getElementById("itemAttackInput");
+      const itemDefenseInput = document.getElementById("itemDefenseInput");
+      const itemBonusInput = document.getElementById("itemBonusInput");
+
+      let resolvedName = (itemNameInput && itemNameInput.value ? itemNameInput.value.trim() : "") || newTitle || 'Item';
+      o.meta.itemStats.name = resolvedName;
+      if (!newTitle) newTitle = resolvedName;
+
+      if (itemAttackInput) {
+        const parsed = parseInt(itemAttackInput.value, 10);
+        o.meta.itemStats.attack = Number.isFinite(parsed) ? parsed : 0;
+      } else {
+        o.meta.itemStats.attack = 0;
+      }
+      if (itemDefenseInput) {
+        const parsed = parseInt(itemDefenseInput.value, 10);
+        o.meta.itemStats.defense = Number.isFinite(parsed) ? parsed : 0;
+      } else {
+        o.meta.itemStats.defense = 0;
+      }
+      if (itemBonusInput) {
+        const parsed = parseInt(itemBonusInput.value, 10);
+        o.meta.itemStats.bonus = Number.isFinite(parsed) ? parsed : 0;
+      } else {
+        o.meta.itemStats.bonus = 0;
+      }
+    }
+
+    o.meta.title = newTitle;
     
     const updatePayload = { id: o.id, meta: o.meta };
     console.log("entitySaveBtn: full meta.givesQuest =", updatePayload.meta.givesQuest);
@@ -1691,7 +1848,7 @@
     spiderSprites.walk[d] = [];
     for (let i = 1; i <= SPIDER_WALK_FRAMES; i++) {
       const img = new Image();
-      img.src = `static/spiderframes/walk_forward/body/${d}/Walk_Forward_Body_${d}_${padFrame(i)}.png`;
+      img.src = `static/SpiderFrames/Walk_Forward/Body/${d}/Walk_Forward_Body_${d}_${padFrame(i)}.png`;
       spiderSprites.walk[d].push(img);
     }
   }
@@ -1982,6 +2139,7 @@
     });
 
     groundItems = state.ground_items || [];
+    if (typeof window.rebuildLooseItemCache === "function") window.rebuildLooseItemCache();
   });
 
       
@@ -2006,6 +2164,7 @@
     groundItems = items || [];
     // optional debug:
     // console.log("ground_items update", groundItems.length);
+    if (typeof window.rebuildLooseItemCache === "function") window.rebuildLooseItemCache();
   });
 
   // also listen for direct resources broadcast
@@ -2356,10 +2515,11 @@
   }
 
   function rewardLabel(item) {
-    if (!item || typeof item !== "object") return "Mystery Item";
+    if (!item || typeof item !== "object") return { name: "Mystery Item", bonus: "", stat: "" };
     const name = item.name || "Item";
     const bonus = (item.bonus !== undefined && item.bonus !== null && item.bonus !== "") ? ` +${item.bonus}` : "";
-    return { name, bonus: bonus }; // return structured to avoid string concat later
+    const stat = (typeof itemStatText === "function") ? itemStatText(item) : "";
+    return { name, bonus, stat };
   }
 
   function fillQuestDialogRewards(obj) {
@@ -2382,8 +2542,13 @@
       spanBonus.className = "quest-dialog-reward-bonus";
       spanBonus.textContent = label.bonus;
       if (!label.bonus) spanBonus.style.display = "none";
+      const spanStat = document.createElement("span");
+      spanStat.className = "quest-dialog-reward-stat";
+      spanStat.textContent = label.stat || "";
+      if (!label.stat) spanStat.style.display = "none";
       li.appendChild(spanName);
       li.appendChild(spanBonus);
+      li.appendChild(spanStat);
       questDialogRewards.appendChild(li);
     });
   }
@@ -2484,10 +2649,29 @@
         if (questToggle) {
           incoming.meta.givesQuest = !!questToggle.checked;
         }
+
+        if (incoming.kind === 'item' && incoming.meta?.itemStats) {
+          const itemNameInput = document.getElementById("itemNameInput");
+          const itemAttackInput = document.getElementById("itemAttackInput");
+          const itemDefenseInput = document.getElementById("itemDefenseInput");
+          const itemBonusInput = document.getElementById("itemBonusInput");
+
+          if (itemNameInput) incoming.meta.itemStats.name = itemNameInput.value || incoming.meta.itemStats.name;
+          if (itemAttackInput && itemAttackInput.value !== "") {
+            incoming.meta.itemStats.attack = parseInt(itemAttackInput.value, 10) || 0;
+          }
+          if (itemDefenseInput && itemDefenseInput.value !== "") {
+            incoming.meta.itemStats.defense = parseInt(itemDefenseInput.value, 10) || 0;
+          }
+          if (itemBonusInput && itemBonusInput.value !== "") {
+            incoming.meta.itemStats.bonus = parseInt(itemBonusInput.value, 10) || 0;
+          }
+        }
       }
     }
 
     mapObjects = objs || [];
+    if (typeof window.rebuildLooseItemCache === "function") window.rebuildLooseItemCache();
     const validQuestIds = new Set(questGiverEntities().map(o => o.id));
     let pruned = false;
     acceptedQuestIds.forEach((questId) => {

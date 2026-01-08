@@ -16,6 +16,239 @@ function resetCollisionOffset() {
   editorCollisionOffsetY = 0;
 }
 
+// ===== Loose item cache (ground + map-placed items) =====
+if (typeof window.looseItemCache === "undefined") window.looseItemCache = [];
+
+function normalizeGroundLooseItem(gi) {
+  if (!gi) return null;
+  const stats = (gi.itemStats && typeof gi.itemStats === "object") ? gi.itemStats : gi;
+  const name = stats?.name || gi.name || "Item";
+  const statTxt = typeof itemStatText === "function" ? itemStatText(stats) : "";
+  return {
+    id: gi.id,
+    source: "ground",
+    groundId: gi.id,
+    x: Number(gi.x) || 0,
+    y: Number(gi.y) || 0,
+    name,
+    radius: 18,
+    statText: statTxt,
+    label: statTxt ? `${name} — ${statTxt}` : name
+  };
+}
+
+function normalizeMapLooseItem(obj) {
+  if (!obj) return null;
+  const meta = obj.meta || {};
+  const stats = meta.itemStats || {};
+  const name = stats.name || meta.title || "Item";
+  const statTxt = typeof itemStatText === "function" ? itemStatText(stats) : "";
+  return {
+    id: obj.id,
+    source: "map",
+    mapObjectId: obj.id,
+    x: Number(obj.x) || 0,
+    y: Number(obj.y) || 0,
+    name,
+    radius: 32,
+    statText: statTxt,
+    label: statTxt ? `${name} — ${statTxt}` : name
+  };
+}
+
+function rebuildLooseItemCache() {
+  const merged = [];
+  const seenIds = new Set();
+  
+  // Add ground items first
+  for (const gi of groundItems || []) {
+    const norm = normalizeGroundLooseItem(gi);
+    if (norm && !seenIds.has(norm.id)) {
+      seenIds.add(norm.id);
+      merged.push(norm);
+    }
+  }
+  
+  // Add map items (avoid duplicates)
+  for (const obj of mapObjects || []) {
+    if (obj && obj.kind === "item" && obj.meta?.entity) {
+      const norm = normalizeMapLooseItem(obj);
+      if (norm && !seenIds.has(norm.id)) {
+        seenIds.add(norm.id);
+        merged.push(norm);
+      }
+    }
+  }
+  window.looseItemCache = merged;
+  return merged;
+}
+
+function getLooseItems() {
+  if (!Array.isArray(window.looseItemCache) || window.looseItemCache.length === 0) {
+    return rebuildLooseItemCache();
+  }
+  return window.looseItemCache;
+}
+
+function findLooseItemNear(wx, wy, radius = 24) {
+  let closest = null;
+  let best = radius;
+  for (const item of getLooseItems()) {
+    const r = item.radius || radius;
+    const dist = Math.hypot(item.x - wx, item.y - wy);
+    if (dist < r && dist < best) {
+      closest = item;
+      best = dist;
+    }
+  }
+  return closest;
+}
+
+const COLLISION_BUILD_W = (typeof BUILD_W === "number") ? BUILD_W : 256;
+const COLLISION_BUILD_H = (typeof BUILD_H === "number") ? BUILD_H : 256;
+const COLLISION_PADDING = (typeof BUILD_COLLISION_PADDING === "number") ? BUILD_COLLISION_PADDING : 0;
+const GROUND_ITEM_COLLISION_PAD = 8;
+
+function screenToWorld(clientX, clientY) {
+  return {
+    x: camera.x + clientX - canvas.width / 2,
+    y: camera.y + clientY - canvas.height / 2
+  };
+}
+
+function pointWithinCanvas(clientX, clientY) {
+  if (!canvas) return false;
+  const rect = canvas.getBoundingClientRect();
+  return clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
+}
+
+function findWorldCollision(wx, wy, padding = 0) {
+  const pad = Number(padding) || 0;
+  if (Array.isArray(mapObjects)) {
+    for (const obj of mapObjects) {
+      const meta = obj?.meta || {};
+      if (!meta.collides) continue;
+      const cw = Number(meta.cw ?? meta.w ?? 0);
+      const ch = Number(meta.ch ?? meta.h ?? 0);
+      if (!(cw > 0 && ch > 0)) continue;
+      const cx = Number(obj.x || 0) + Number(meta.cx || 0);
+      const cy = Number(obj.y || 0) + Number(meta.cy || 0);
+      const left = cx - cw / 2 - pad;
+      const right = cx + cw / 2 + pad;
+      const top = cy - ch / 2 - pad;
+      const bottom = cy + ch / 2 + pad;
+      if (wx >= left && wx <= right && wy >= top && wy <= bottom) {
+        return { source: "map", object: obj };
+      }
+    }
+  }
+
+  if (Array.isArray(buildings)) {
+    for (const b of buildings) {
+      const bx = Number(b?.x || 0);
+      const by = Number(b?.y || 0);
+      const left = bx - COLLISION_BUILD_W / 2 - COLLISION_PADDING - pad;
+      const right = bx + COLLISION_BUILD_W / 2 + COLLISION_PADDING + pad;
+      const top = by - COLLISION_BUILD_H / 2 - COLLISION_PADDING - pad;
+      const bottom = by + COLLISION_BUILD_H / 2 + COLLISION_PADDING + pad;
+      if (wx >= left && wx <= right && wy >= top && wy <= bottom) {
+        return { source: "building", object: b };
+      }
+    }
+  }
+
+  return null;
+}
+
+function describeWorldCollision(hit) {
+  if (!hit) return "Blocked by collision";
+  if (hit.object?.meta?.title) return `Blocked by ${hit.object.meta.title}`;
+  if (hit.object?.kind) return `Blocked by ${hit.object.kind}`;
+  if (hit.source === "building") return "Blocked by building";
+  return "Blocked by collision";
+}
+
+let dropBlockTitleTimer = null;
+function notifyWorldDropBlocked(message) {
+  console.warn(message);
+  if (!canvas) return;
+  canvas.title = message;
+  if (dropBlockTitleTimer) clearTimeout(dropBlockTitleTimer);
+  dropBlockTitleTimer = setTimeout(() => {
+    if (canvas && canvas.title === message) {
+      canvas.title = "";
+    }
+  }, 1500);
+}
+
+function tryMoveGroundItemOnWorld(gi, clientX, clientY) {
+  if (!gi) return false;
+  if (!pointWithinCanvas(clientX, clientY)) return false;
+  const worldPos = screenToWorld(clientX, clientY);
+  const blocked = findWorldCollision(worldPos.x, worldPos.y, GROUND_ITEM_COLLISION_PAD);
+  if (blocked) {
+    notifyWorldDropBlocked(describeWorldCollision(blocked));
+    return false;
+  }
+  
+  const isMapObject = gi.kind === "item" && gi.meta;
+  if (isMapObject) {
+    socket.emit("update_map_object", {
+      id: gi.id,
+      x: worldPos.x,
+      y: worldPos.y
+    });
+  } else {
+    socket.emit("move_ground_item", {
+      groundItemId: gi.id,
+      x: worldPos.x,
+      y: worldPos.y
+    });
+  }
+  
+  gi.x = worldPos.x;
+  gi.y = worldPos.y;
+  if (typeof rebuildLooseItemCache === "function") rebuildLooseItemCache();
+  return true;
+}
+
+window.rebuildLooseItemCache = rebuildLooseItemCache;
+// Defer initial cache build until mapObjects is defined (loaded from index.html)
+if (typeof mapObjects !== "undefined" && typeof groundItems !== "undefined") {
+  rebuildLooseItemCache();
+} else {
+  // Will be called later when state arrives or manually triggered
+  setTimeout(() => {
+    if (typeof mapObjects !== "undefined" && typeof groundItems !== "undefined") {
+      rebuildLooseItemCache();
+    }
+  }, 100);
+}
+
+// ===== Slot highlight helpers =====
+let slotHighlightCache = [];
+
+function invalidateSlotHighlightables() {
+  slotHighlightCache = [];
+}
+
+function getSlotHighlightables() {
+  slotHighlightCache = slotHighlightCache.filter((el) => el && document.body.contains(el));
+  if (slotHighlightCache.length === 0) {
+    slotHighlightCache = Array.from(document.querySelectorAll("li[data-slot-index]"));
+  }
+  return slotHighlightCache;
+}
+
+function clearSlotHighlights() {
+  for (const li of getSlotHighlightables()) {
+    li.style.outline = "";
+    li.style.backgroundColor = "";
+  }
+}
+
+window.invalidateSlotHighlightables = invalidateSlotHighlightables;
+
 // Track selected entity in editor mode for movement
 if (typeof window.selectedEditorEntity === "undefined") window.selectedEditorEntity = null;
 var selectedEditorEntity = window.selectedEditorEntity;
@@ -33,6 +266,16 @@ if (typeof window.keys === "undefined") window.keys = {};
 var keys = window.keys;
 document.addEventListener("keydown", (e) => {
   keys[e.key] = true;
+
+  // Escape: exit item placement mode (Create Item inactive)
+  if (!e.repeat && e.key === "Escape" && window.itemPlacementMode) {
+    window.itemPlacementMode = false;
+    const itemTilePicker = document.getElementById('itemTilePicker');
+    if (itemTilePicker) itemTilePicker.style.display = 'none';
+    const brushSelect = document.getElementById('brushSelect');
+    if (brushSelect) brushSelect.disabled = false;
+    e.preventDefault();
+  }
 
   // Toggle collision on/off while in editor
   if (!e.repeat && editorMode && (e.key === "c" || e.key === "C")) {
@@ -110,21 +353,23 @@ canvas.addEventListener("mousemove", e=>{
 
   hoveredResource = null;
   hoveredPlayerSid = null;
+  hoveredObject = null;
+  hoveredUnit = null;
   canvas.title = "";
 
-    // Ground item hover (priority 0)
+    // Ground or map item hover (priority 0)
   hoveredGroundItem = null;
-  for (const it of groundItems) {
-    if (Math.hypot(it.x - wx, it.y - wy) < 18) {
-      hoveredGroundItem = it;
-      const statTxt = itemStatText ? itemStatText(it.name) : "";
-      const label = it.name || "item";
-      canvas.title = statTxt ? `${label} — ${statTxt}` : label;
+  for (const loose of getLooseItems()) {
+    const threshold = loose.radius || 20;
+    if (Math.hypot(loose.x - wx, loose.y - wy) < threshold) {
+      hoveredGroundItem = loose;
+      canvas.title = loose.label || loose.name || "Item";
       canvas.style.cursor = "grab";
       break;
     }
   }
- if (hoveredGroundItem && !draggingPickup) return;
+  // Don't return early if in item placement mode (allow brush preview to show)
+  if (hoveredGroundItem && !draggingPickup && !window.itemPlacementMode) return;
 
 
   // Resource hover (priority 1)
@@ -180,6 +425,42 @@ canvas.addEventListener("mousemove", e=>{
     if (Math.abs(wx - o.x) < w/2 && Math.abs(wy - o.y) < h/2) {
       hoveredAttackEntity = o;
       canvas.style.cursor = 'crosshair';
+      return;
+    }
+  }
+
+  // Units hover (priority 5)
+  for (const u of myUnits) {
+    if (Math.hypot(u.x - wx, u.y - wy) < 20) {
+      hoveredUnit = u;
+      canvas.style.cursor = 'pointer';
+      canvas.title = `Unit ${u.id.slice(0, 6)}`;
+      return;
+    }
+  }
+
+  // Buildings (mine) hover (priority 6)
+  for (const b of buildings) {
+    if (b.owner === mySid && Math.abs(wx - b.x) < BUILD_W/2 && Math.abs(wy - b.y) < BUILD_H/2) {
+      hoveredObject = { ...b, type: 'building', w: BUILD_W, h: BUILD_H };
+      canvas.style.cursor = 'pointer';
+      return;
+    }
+  }
+
+  // Any tile/entity hover (priority 7)
+  for (let i = (mapObjects || []).length - 1; i >= 0; i--) {
+    const o = mapObjects[i];
+    if (!o || !o.meta || !o.meta.entity) continue;
+    
+    let w = BUILD_W, h = BUILD_H;
+    if (o.type === 'building') { w = BUILD_W; h = BUILD_H; }
+    else if (o.meta) { const def = TILE_DEFS[o.kind] || { w: 256, h: 256 }; w = o.meta?.w ?? def.w; h = o.meta?.h ?? def.h; }
+    
+    if (Math.abs(wx - o.x) < w/2 && Math.abs(wy - o.y) < h/2) {
+      hoveredObject = { ...o, w, h };
+      canvas.style.cursor = 'pointer';
+      if (o.meta?.title) canvas.title = o.meta.title;
       return;
     }
   }
@@ -298,42 +579,55 @@ canvas.addEventListener("mousedown", e => {
       const d = Math.hypot(g.x - wx, g.y - wy);
       if (d < best) { best = d; nearest = g; nearestType = 'ground'; }
     }
+    // Check trees
+    for (const t of trees || []) {
+      const d = Math.hypot(t.x - wx, t.y - wy);
+      if (d < best) { best = d; nearest = t; nearestType = 'tree'; }
+    }
     if (nearest) {
       if (nearestType === 'map') socket.emit("delete_map_object", { id: nearest.id });
-      else socket.emit("delete_ground_item", { id: nearest.id });
+      else if (nearestType === 'ground') socket.emit("delete_ground_item", { id: nearest.id });
+      else if (nearestType === 'tree') socket.emit("delete_tree", { x: nearest.x, y: nearest.y });
       e.preventDefault();
       return;
     }
   }
 
-  // ✅ Check for ground item drag (before entity inspect or editor placement)
+  // ✅ Check for any loose item drag (before entity inspect or editor placement)
   if (e.button === 0 && !e.shiftKey) {
-    const hit = groundItems.find(it => Math.hypot(it.x - wx, it.y - wy) < 18);
+    const hit = findLooseItemNear(wx, wy, 26);
     if (hit) {
+      // Allow dragging ground items anywhere; allow map items only outside editor mode
+      if (hit.source === "map" && editorMode) {
+        return;
+      }
+
       const picker = getFirstSelectedUnit();
-      const canPickupWithUnit = picker ? unitCanPickup(picker, hit) : false;
-      draggingPickup = { groundItemId: hit.id, itemName: hit.name };
-      if (picker && canPickupWithUnit) draggingPickup.unitId = picker.id;
+      const resolved = hit.source === "ground"
+        ? (groundItems || []).find((gi) => gi.id === hit.groundId)
+        : (mapObjects || []).find((obj) => obj.id === hit.mapObjectId);
+      
+      draggingPickup = { itemName: hit.name };
+      if (hit.source === "ground") draggingPickup.groundItemId = hit.groundId;
+      if (hit.source === "map") draggingPickup.mapObjectItemId = hit.mapObjectId;
+      // Only set picker if we have a selected unit AND it can actually pickup this item
+      if (picker && resolved && unitCanPickup(picker, resolved)) {
+        draggingPickup.unitId = picker.id;
+      }
 
       dragMouse.x = e.clientX;
       dragMouse.y = e.clientY;
 
-      // Create drag ghost above DOM
-      createDragGhost(hit.name || 'item');
-      
-      // CAPTURE events globally so UI can't "steal" the drag
+      createDragGhost(buildDragGhostOptions(resolved || hit));
+
       const dragMoveHandler = (ev) => {
         dragMouse.x = ev.clientX;
         dragMouse.y = ev.clientY;
         updateDragGhost(ev.clientX, ev.clientY);
-        
-        // Highlight slots when hovering during ground item drag
-        if (draggingPickup && draggingPickup.groundItemId) {
+
+        if (draggingPickup && (draggingPickup.groundItemId || draggingPickup.mapObjectItemId)) {
           const slotEl = findSlotElementAtScreen(ev.clientX, ev.clientY);
-          document.querySelectorAll("li[data-slot-index]").forEach(li => {
-            li.style.outline = "";
-            li.style.backgroundColor = "";
-          });
+          clearSlotHighlights();
           if (slotEl) {
             slotEl.style.outline = "3px solid #0ff";
             slotEl.style.backgroundColor = "rgba(0,255,255,0.2)";
@@ -341,7 +635,7 @@ canvas.addEventListener("mousedown", e => {
         }
         ev.preventDefault();
       };
-      
+
       window.addEventListener("mousemove", dragMoveHandler, true);
       window.addEventListener("mouseup", onGlobalDragEnd, true);
 
@@ -460,6 +754,33 @@ if (window.selectedEditorEntity) {
   return;
 }
 
+// Check if we're in item placement mode
+if (window.itemPlacementMode) {
+  // Place item with selected tile
+  const itemTile = window.selectedItemTile || { tx: 0, ty: 0 };
+  const meta = {
+    entity: true,
+    title: 'Item',
+    bio: 'An item that can be picked up',
+    actions: [],
+    collides: false,
+    w: 64,
+    h: 64,
+    z: getCurrentZOrder(),
+    itemTile: itemTile,
+    itemStats: {
+      name: 'Item',
+      attack: 0,
+      defense: 0,
+      bonus: 0
+    }
+  };
+  socket.emit("place_map_object", { type: "tile", kind: "item", x: wx, y: wy, meta });
+  window.itemPlacementMode = false; // Reset after placing
+  e.preventDefault();
+  return;
+}
+
 const [type, kind] = brushSelect.value.split(":");
 
 // Special handling for billboard - spawn near center
@@ -546,11 +867,8 @@ if (kind === 'billboard') {
   meta.anim = 'walk';
   meta.w = 100;
   meta.h = 100;
-  // Also set at top level for server
-  const spiderHp = 50;
-  const spiderMaxHp = 50;
-  meta.hp = spiderHp;
-  meta.maxHp = spiderMaxHp;
+  meta.hp = 50;
+  meta.maxHp = 50;
 } else if (entityMode) {
   meta = {
     ...meta,
@@ -724,13 +1042,9 @@ function onGlobalDragMove(e) {
   updateDragGhost(e.clientX, e.clientY);
 
   // Highlight slots when hovering during ground item drag
-  if (draggingPickup && draggingPickup.groundItemId) {
+  if (draggingPickup && (draggingPickup.groundItemId || draggingPickup.mapObjectItemId)) {
     const slotEl = findSlotElementAtScreen(e.clientX, e.clientY);
-    // Clear previous highlights
-    document.querySelectorAll("li[data-slot-index]").forEach(li => {
-      li.style.outline = "";
-      li.style.backgroundColor = "";
-    });
+    clearSlotHighlights();
     // Highlight current slot
     if (slotEl) {
       slotEl.style.outline = "3px solid #0ff";
@@ -742,8 +1056,67 @@ function onGlobalDragMove(e) {
 }
 
 // Drag ghost visual (renders above DOM)
-function createDragGhost(name) {
+const DRAG_TILE_PREVIEW_SIZE = 32;
+let dragPreviewCanvas = null;
+let dragPreviewCtx = null;
+
+function getDragPreviewCanvas() {
+  if (!dragPreviewCanvas) {
+    dragPreviewCanvas = document.createElement("canvas");
+    dragPreviewCanvas.width = DRAG_TILE_PREVIEW_SIZE;
+    dragPreviewCanvas.height = DRAG_TILE_PREVIEW_SIZE;
+    dragPreviewCtx = dragPreviewCanvas.getContext("2d");
+    dragPreviewCtx.imageSmoothingEnabled = false;
+  }
+  return dragPreviewCanvas;
+}
+
+function makeTilePreviewDataUrl(tile) {
+  if (!tile || typeof tile.tx !== "number" || typeof tile.ty !== "number") return null;
+  if (!window.itemTileSheet || !window.itemTileSheet.complete) return null;
+  const canvas = getDragPreviewCanvas();
+  const ctx = dragPreviewCtx || canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.clearRect(0, 0, DRAG_TILE_PREVIEW_SIZE, DRAG_TILE_PREVIEW_SIZE);
+  const tileSize = 32;
+  ctx.drawImage(
+    window.itemTileSheet,
+    tile.tx * tileSize,
+    tile.ty * tileSize,
+    tileSize,
+    tileSize,
+    0,
+    0,
+    DRAG_TILE_PREVIEW_SIZE,
+    DRAG_TILE_PREVIEW_SIZE
+  );
+  try {
+    return canvas.toDataURL("image/png");
+  } catch (ex) {
+    console.warn("Failed to build tile preview", ex);
+    return null;
+  }
+}
+
+function buildDragGhostOptions(pickupTarget) {
+  const fallback = pickupTarget?.meta?.itemStats?.name || pickupTarget?.name || "item";
+  let previewUrl = null;
+  if (pickupTarget?.meta?.itemTile) {
+    previewUrl = makeTilePreviewDataUrl(pickupTarget.meta.itemTile);
+  }
+  if (!previewUrl && pickupTarget?.name && typeof itemIcons !== "undefined") {
+    const icon = itemIcons[pickupTarget.name];
+    if (icon && icon.complete && icon.naturalWidth > 0) {
+      previewUrl = icon.src;
+    }
+  }
+  return { label: fallback, previewUrl };
+}
+
+function createDragGhost(options) {
   removeDragGhost();
+  const opts = (typeof options === "string") ? { label: options } : (options || {});
+  const label = (opts.label || "item").toString();
   const g = document.createElement('div');
   g.id = 'drag-ghost';
   g.style.position = 'fixed';
@@ -760,7 +1133,15 @@ function createDragGhost(name) {
   g.style.color = '#fff';
   g.style.fontSize = '12px';
   g.style.fontWeight = 'bold';
-  g.textContent = name.substring(0, 3).toUpperCase();
+  if (opts.previewUrl) {
+    g.style.backgroundImage = `url(${opts.previewUrl})`;
+    g.style.backgroundSize = 'cover';
+    g.style.backgroundPosition = 'center';
+    g.style.border = '2px solid #6cf';
+    g.textContent = '';
+  } else {
+    g.textContent = label.substring(0, 3).toUpperCase();
+  }
   document.body.appendChild(g);
 }
 
@@ -798,22 +1179,26 @@ function onGlobalDragEnd(e) {
     try { dragMouse.x = 0; dragMouse.y = 0; } catch (ex) {}
     try { canvas.style.cursor = "default"; } catch (ex) {}
     try { removeDragGhost(); } catch (ex) {}
-    try { document.querySelectorAll("li[data-slot-index]").forEach(li => { li.style.outline = ""; li.style.backgroundColor = ""; }); } catch (ex) {}
+    try { clearSlotHighlights(); } catch (ex) {}
     try { setTimeout(()=>{ if (document.activeElement && typeof document.activeElement.blur === 'function') document.activeElement.blur(); }, 0); } catch (ex) {}
     dragEndHandled = false;
   }
 
   // expose a global cleanup in case other modules need to force-remove the drag state
-  try { window.cleanupDragState = function(){ try{ draggingPickup = null; }catch(e){} try{ removeDragGhost(); }catch(e){} try{ document.querySelectorAll("li[data-slot-index]").forEach(li => li.style.outline = ""); }catch(e){} }; } catch (ex) {}
+  try { window.cleanupDragState = function(){ try{ draggingPickup = null; }catch(e){} try{ removeDragGhost(); }catch(e){} try{ clearSlotHighlights(); }catch(e){} }; } catch (ex) {}
 
   if (!draggingPickup) { 
     finalizeDragCleanup(); 
     return; 
   }
 
-  const gi = groundItems.find(x => x.id === draggingPickup.groundItemId);
+  // Find the item being dragged (either ground item or map object item)
+  const gi = draggingPickup.groundItemId 
+    ? groundItems.find(x => x.id === draggingPickup.groundItemId)
+    : mapObjects.find(x => x.id === draggingPickup.mapObjectItemId);
   const picker = myUnits.find(u => u.id === draggingPickup.unitId);
   const dragData = draggingPickup; // Save reference before cleanup
+  const isMapObjectItem = !!draggingPickup.mapObjectItemId;
   draggingPickup = null;
 
   if (!gi) { finalizeDragCleanup(); return; }
@@ -822,7 +1207,17 @@ function onGlobalDragEnd(e) {
 
   // must drop on a slot
   let slotEl = findSlotElementAtScreen(e.clientX, e.clientY);
+  console.log("Drop detected - slotEl:", slotEl, "at position:", e.clientX, e.clientY);
   if (!slotEl) {
+    // If we released over the canvas, allow relocating ground or map items in-world.
+    if ((dragData?.groundItemId || dragData?.mapObjectItemId) && gi) {
+      const dropped = tryMoveGroundItemOnWorld(gi, e.clientX, e.clientY);
+      if (dropped) {
+        finalizeDragCleanup();
+        return;
+      }
+    }
+
     // Fallback: try nearest entity slot if user released slightly off-target
     const entityList = document.getElementById("entity-items-list");
     if (entityList) {
@@ -861,23 +1256,57 @@ function onGlobalDragEnd(e) {
   // Check if this is an entity slot
   const entityId = slotEl.dataset.entityId;
   if (entityId) {
-    // Ground -> Entity drop
-    socket.emit("ground_give_to_entity", {
-      entityId,
-      entitySlotIndex: slotIndex,
-      groundItemId: gi.id
-    });
-    // Optimistic local update: remove ground item and add to entity slot
-    try {
-      const giIndexLocal = groundItems.findIndex(g => g.id === gi.id);
-      if (giIndexLocal !== -1) groundItems.splice(giIndexLocal, 1);
-      const entLocal = mapObjects.find(m => m.id === entityId);
-      if (entLocal) {
-        entLocal.itemSlots = entLocal.itemSlots || [];
-        entLocal.itemSlots[slotIndex] = { id: gi.id, name: gi.name };
-        if (selectedEntityId === entityId) openEntityInspector(entLocal);
-      }
-    } catch (ex) { console.error("optimistic ground->entity update failed", ex); }
+    // Ground/MapObject -> Entity drop
+    if (isMapObjectItem) {
+      // For map object items, we need to send the item data to the server
+      socket.emit("map_item_give_to_entity", {
+        entityId,
+        entitySlotIndex: slotIndex,
+        mapObjectItemId: gi.id,
+        itemData: {
+          name: gi.meta?.itemStats?.name || 'Item',
+          attack: gi.meta?.itemStats?.attack || 0,
+          defense: gi.meta?.itemStats?.defense || 0,
+          bonus: gi.meta?.itemStats?.bonus || 0
+        }
+      });
+      // Optimistic local update: remove map object item and add to entity slot
+      try {
+        const itemIndex = mapObjects.findIndex(o => o.id === gi.id);
+        if (itemIndex !== -1) {
+          mapObjects.splice(itemIndex, 1);
+          if (typeof rebuildLooseItemCache === "function") rebuildLooseItemCache();
+        }
+        const entLocal = mapObjects.find(m => m.id === entityId);
+        if (entLocal) {
+          entLocal.itemSlots = entLocal.itemSlots || [];
+          entLocal.itemSlots[slotIndex] = { 
+            id: gi.id, 
+            name: gi.meta?.itemStats?.name || 'Item'
+          };
+          if (selectedEntityId === entityId) openEntityInspector(entLocal);
+        }
+      } catch (ex) { console.error("optimistic map item->entity update failed", ex); }
+    } else {
+      // Original ground item handling
+      socket.emit("ground_give_to_entity", {
+        entityId,
+        entitySlotIndex: slotIndex,
+        groundItemId: gi.id
+      });
+      // Optimistic local update: remove ground item and add to entity slot
+      try {
+        const giIndexLocal = groundItems.findIndex(g => g.id === gi.id);
+        if (giIndexLocal !== -1) groundItems.splice(giIndexLocal, 1);
+        if (typeof rebuildLooseItemCache === "function") rebuildLooseItemCache();
+        const entLocal = mapObjects.find(m => m.id === entityId);
+        if (entLocal) {
+          entLocal.itemSlots = entLocal.itemSlots || [];
+          entLocal.itemSlots[slotIndex] = { id: gi.id, name: gi.name };
+          if (selectedEntityId === entityId) openEntityInspector(entLocal);
+        }
+      } catch (ex) { console.error("optimistic ground->entity update failed", ex); }
+    }
     finalizeDragCleanup();
     return;
   }
@@ -889,27 +1318,75 @@ function onGlobalDragEnd(e) {
   const targetUnit = myUnits.find(u => u.id === unitId);
   if (!targetUnit) { finalizeDragCleanup(); return; }
 
-  if (!targetUnit.itemSlots) targetUnit.itemSlots = [null, null];
-  if (targetUnit.itemSlots[slotIndex]) return; // must be empty
+  if (!targetUnit.itemSlots) targetUnit.itemSlots = [null, null, null, null, null];
+  if (targetUnit.itemSlots[slotIndex]) {
+    console.log("Slot already occupied", slotIndex, targetUnit.itemSlots[slotIndex]);
+    finalizeDragCleanup();
+    return;
+  }
   // Ensure we have a unit picker in range for unit-slot pickups
   if (!picker || !unitCanPickup(picker, gi)) {
+    console.log("Unit cannot pickup - picker:", picker, "canPickup:", picker ? unitCanPickup(picker, gi) : false);
     finalizeDragCleanup();
     return;
   }
 
-  socket.emit("pickup_item", {
-    unitId: targetUnit.id,
-    slotIndex,
-    groundItemId: gi.id
-  });
-  // Optimistic local update: remove ground item and add to unit slot immediately
-  try {
-    const giIndexLocal = groundItems.findIndex(g => g.id === gi.id);
-    if (giIndexLocal !== -1) groundItems.splice(giIndexLocal, 1);
-    targetUnit.itemSlots = targetUnit.itemSlots || [];
-    targetUnit.itemSlots[slotIndex] = { id: ("local-" + (gi.id || Math.random())), name: gi.name || "item" };
-    if (currentItemsUnitId === targetUnit.id) renderUnitItems(targetUnit);
-  } catch (ex) { console.error("optimistic pickup_item failed", ex); }
+  if (isMapObjectItem) {
+    // For map object items, send the item data
+    socket.emit("pickup_map_item", {
+      unitId: targetUnit.id,
+      slotIndex,
+      mapObjectItemId: gi.id,
+      itemData: {
+        name: gi.meta?.itemStats?.name || 'Item',
+        attack: gi.meta?.itemStats?.attack || 0,
+        defense: gi.meta?.itemStats?.defense || 0,
+        bonus: gi.meta?.itemStats?.bonus || 0
+      }
+    });
+    // Optimistic local update: remove map object item and add to unit slot
+    try {
+      const itemIndex = mapObjects.findIndex(o => o.id === gi.id);
+      if (itemIndex !== -1) {
+        console.log("Removing map object item from index:", itemIndex, gi);
+        mapObjects.splice(itemIndex, 1);
+        if (typeof rebuildLooseItemCache === "function") rebuildLooseItemCache();
+      }
+      targetUnit.itemSlots = targetUnit.itemSlots || [];
+      targetUnit.itemSlots[slotIndex] = { 
+        id: ("local-" + (gi.id || Math.random())), 
+        name: gi.meta?.itemStats?.name || "item",
+        itemTile: gi.meta?.itemTile, // Preserve tile info
+        attack: gi.meta?.itemStats?.attack || 0,
+        defense: gi.meta?.itemStats?.defense || 0,
+        bonus: gi.meta?.itemStats?.bonus || 0
+      };
+      if (currentItemsUnitId === targetUnit.id) renderUnitItems(targetUnit);
+    } catch (ex) { console.error("optimistic pickup_map_item failed", ex); }
+  } else {
+    // Original ground item handling
+    socket.emit("pickup_item", {
+      unitId: targetUnit.id,
+      slotIndex,
+      groundItemId: gi.id
+    });
+    // Optimistic local update: remove ground item and add to unit slot immediately
+    try {
+      const giIndexLocal = groundItems.findIndex(g => g.id === gi.id);
+      if (giIndexLocal !== -1) groundItems.splice(giIndexLocal, 1);
+      if (typeof rebuildLooseItemCache === "function") rebuildLooseItemCache();
+      targetUnit.itemSlots = targetUnit.itemSlots || [];
+      const stats = (gi.itemStats && typeof gi.itemStats === "object") ? gi.itemStats : gi;
+      targetUnit.itemSlots[slotIndex] = {
+        id: ("local-" + (gi.id || Math.random())),
+        name: (stats && stats.name) || gi.name || "item",
+        attack: Number(stats.attack) || 0,
+        defense: Number(stats.defense) || 0,
+        bonus: Number(stats.bonus) || 0
+      };
+      if (currentItemsUnitId === targetUnit.id) renderUnitItems(targetUnit);
+    } catch (ex) { console.error("optimistic pickup_item failed", ex); }
+  }
   finalizeDragCleanup();
 }
 
@@ -1111,11 +1588,28 @@ canvas.addEventListener("drop", (e) => {
   const wx = camera.x + e.clientX - canvas.width / 2;
   const wy = camera.y + e.clientY - canvas.height / 2;
 
-  // Dropping equipment item onto world => SERVER creates ground item
+  // Dropping equipment item from unit onto world => SERVER creates ground item
   if (payload.type === "unit_item") {
     console.log("canvas drop unit_item -> ground", payload, { x: wx, y: wy });
     socket.emit("drop_item", {
       unitId: payload.unitId,
+      slotIndex: payload.slotIndex,
+      x: wx,
+      y: wy
+    });
+    return;
+  }
+
+  // Dropping item from entity slot onto world => relocate or drop to ground
+  if (payload.type === "entity_item") {
+    console.log("canvas drop entity_item -> ground", payload, { x: wx, y: wy });
+    const blocked = findWorldCollision(wx, wy, GROUND_ITEM_COLLISION_PAD);
+    if (blocked) {
+      notifyWorldDropBlocked(describeWorldCollision(blocked));
+      return;
+    }
+    socket.emit("entity_drop_item", {
+      entityId: payload.entityId,
       slotIndex: payload.slotIndex,
       x: wx,
       y: wy
@@ -1151,6 +1645,20 @@ function ensureEntityMeta(o) {
   if (typeof o.meta.title !== "string") o.meta.title = "";
   if (typeof o.meta.bio !== "string") o.meta.bio = "";
   if (!Array.isArray(o.meta.actions)) o.meta.actions = [];
+  if (o.kind === "item") {
+    const stats = o.meta.itemStats && typeof o.meta.itemStats === "object" ? o.meta.itemStats : {};
+    o.meta.itemStats = stats;
+    const fallbackTitle = (typeof o.meta.title === "string" && o.meta.title.trim()) ? o.meta.title : getDefaultEntityTitle(o);
+    if (typeof stats.name !== "string" || !stats.name.trim()) {
+      stats.name = fallbackTitle || "Item";
+    }
+    const atk = Number(stats.attack);
+    const def = Number(stats.defense);
+    const bonus = Number(stats.bonus);
+    stats.attack = Number.isFinite(atk) ? atk : 0;
+    stats.defense = Number.isFinite(def) ? def : 0;
+    stats.bonus = Number.isFinite(bonus) ? bonus : 0;
+  }
 }
 
 function getDefaultEntityTitle(o) {

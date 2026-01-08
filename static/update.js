@@ -430,6 +430,7 @@ function update(){
   lastUpdateTime = now;
 
     // --- CAMERA ---
+  const keys = window.keys || {};
   if(keys.w) camera.y -= camSpeed * dtScale;
   if(keys.s) camera.y += camSpeed * dtScale;
   if(keys.a) camera.x -= camSpeed * dtScale;

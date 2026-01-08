@@ -7,6 +7,12 @@ var selecting = window.selecting;
 
 const QUEST_MARKER_OFFSET = 6; // pixels above the sprite's head
 
+// Load item tile sheet
+const itemTileSheet = new Image();
+itemTileSheet.src = 'static/all.png';
+window.itemTileSheet = itemTileSheet; // Make it globally accessible
+const ITEM_TILE_SIZE = 32;
+
 function drawCircleDebug(x, y, r, color) {
   ctx.strokeStyle = color;
   ctx.lineWidth = 1;
@@ -240,6 +246,46 @@ function draw() {
       const icon = itemIcons[obj.name];
       if (icon && icon.complete && icon.naturalWidth > 0) {
         ctx.drawImage(icon, sx - GROUND_ITEM_SIZE/2, sy - GROUND_ITEM_SIZE/2, GROUND_ITEM_SIZE, GROUND_ITEM_SIZE);
+      } else {
+        ctx.fillStyle = "rgba(255,255,255,0.15)";
+        ctx.beginPath();
+        ctx.arc(sx, sy, 14, 0, Math.PI*2);
+        ctx.fill();
+        ctx.strokeStyle = "white";
+        ctx.stroke();
+      }
+
+      // name above item (always)
+      ctx.fillStyle = "white";
+      ctx.font = "12px monospace";
+      ctx.textAlign = "center";
+      ctx.fillText(obj.name, sx, sy - 22);
+
+      // Hover tooltip for ground item stats
+      if (hoveredGroundItem && hoveredGroundItem.id === obj.id) {
+        const statTxt = itemStatText ? itemStatText(obj.name) : "";
+        if (statTxt) {
+          const tip = statTxt;
+          ctx.font = "11px monospace";
+          const tw = ctx.measureText(tip).width + 12;
+          const th = 16;
+          const tx = sx - tw / 2;
+          const ty = sy - 42;
+
+          ctx.fillStyle = "rgba(0,0,0,0.7)";
+          ctx.fillRect(tx, ty - th, tw, th);
+          ctx.strokeStyle = "#0ff";
+          ctx.lineWidth = 1;
+          ctx.strokeRect(tx, ty - th, tw, th);
+
+          ctx.fillStyle = "#0ff";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(tip, sx, ty - th / 2);
+
+          // reset baseline for downstream text
+          ctx.textBaseline = "alphabetic";
+        }
       }
       continue;
     }
@@ -292,6 +338,48 @@ function draw() {
         );
         ctx.setLineDash([]);
       }
+      continue;
+    }
+
+    // Render items from tile sheet
+    if (obj.kind === 'item' && obj.meta?.itemTile) {
+      // Skip drawing if this item is being dragged
+      if (draggingPickup && draggingPickup.mapObjectItemId === obj.id) continue;
+      
+      const w = obj.meta?.w ?? 64;
+      const h = obj.meta?.h ?? 64;
+      const itemTile = obj.meta.itemTile;
+      
+      // Draw from tile sheet if loaded
+      if (itemTileSheet.complete && itemTileSheet.naturalWidth > 0) {
+        const srcX = itemTile.tx * ITEM_TILE_SIZE;
+        const srcY = itemTile.ty * ITEM_TILE_SIZE;
+        ctx.drawImage(
+          itemTileSheet,
+          srcX, srcY, ITEM_TILE_SIZE, ITEM_TILE_SIZE,
+          sx - w / 2, sy - h / 2, w, h
+        );
+      } else {
+        // Fallback placeholder
+        ctx.fillStyle = "rgba(180,180,100,0.5)";
+        ctx.fillRect(sx - w / 2, sy - h / 2, w, h);
+        ctx.strokeStyle = "#ff6";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(sx - w / 2, sy - h / 2, w, h);
+      }
+      
+      // Draw title and stats
+      drawEntityTitle(obj, sx, sy);
+      
+      // Editor mode selection highlight
+      if (editorMode && window.selectedEditorEntity && obj.id === window.selectedEditorEntity.id) {
+        ctx.strokeStyle = "lime";
+        ctx.lineWidth = 3;
+        ctx.setLineDash([8, 4]);
+        ctx.strokeRect(sx - w / 2 - 5, sy - h / 2 - 5, w + 10, h + 10);
+        ctx.setLineDash([]);
+      }
+      
       continue;
     }
     
@@ -548,7 +636,8 @@ function draw() {
 }
 
 // ===== Editor placement preview (ghost) =====
-if (editorMode) {
+// Suppress editor brush preview while placing an item
+if (editorMode && !window.itemPlacementMode) {
   const bs = document.getElementById("brushSelect");
   if (bs && bs.value) {
     const { x: wx, y: wy } = mouseWorld();
@@ -628,11 +717,33 @@ for (const sid in players) {
 }
 
 // NPCs are now added to worldRenderables to respect z-order
-// Ensure their animation state exists
+// Ensure their animation state exists and initialize client-side movement
 for (const obj of mapObjects) {
   if (obj.kind === 'npc' || obj.kind === 'spider') {
     if (!npcAnimState[obj.id]) {
-      npcAnimState[obj.id] = { renderFrame: 0, renderAttackFrame: 0 };
+      npcAnimState[obj.id] = { 
+        renderFrame: 0, 
+        renderAttackFrame: 0,
+        clientX: obj.x,
+        clientY: obj.y,
+        lastTargetWP: null
+      };
+    }
+    // Only sync to server position when targetWaypoint changes (new waypoint reached)
+    const state = npcAnimState[obj.id];
+    const targetWP = obj.meta?.targetWaypoint;
+    if (targetWP) {
+      const wpKey = `${targetWP.x},${targetWP.y}`;
+      if (state.lastTargetWP !== wpKey) {
+        // New waypoint - check if it's far from client position
+        const dist = Math.hypot(targetWP.x - state.clientX, targetWP.y - state.clientY);
+        if (dist > 200) {
+          // Far away - likely respawn or teleport, snap to server position
+          state.clientX = obj.x;
+          state.clientY = obj.y;
+        }
+        state.lastTargetWP = wpKey;
+      }
     }
   }
 }
@@ -657,13 +768,65 @@ for (const item of unitRenderables) {
   const ownerName = item.owner;
   const isNPC = item.isNPC;
 
-  const sx = canvas.width/2 + u.x - camera.x;
-  const sy = canvas.height/2 + u.y - camera.y;
+  // Client-side interpolation for NPCs - ALWAYS use client position, never server position
+  let renderX, renderY;
+  let clientAnim = isNPC ? (u.meta?.anim || 'idle') : u.anim;
+  
+  if (isNPC && animState) {
+    // NPCs always render at client-interpolated position
+    const targetWP = u.meta?.targetWaypoint;
+    
+    if (targetWP) {
+      // Smoothly move toward target waypoint
+      const dx = targetWP.x - animState.clientX;
+      const dy = targetWP.y - animState.clientY;
+      const dist = Math.hypot(dx, dy);
+      
+      if (dist > 1.0) {
+        const speed = 2.0; // client-side movement speed (pixels per frame)
+        const step = Math.min(speed, dist);
+        animState.clientX += (dx / dist) * step;
+        animState.clientY += (dy / dist) * step;
+        clientAnim = 'walk';
+        
+        // Update direction based on movement
+        const angle = ((Math.atan2(dy, dx) * 180 / Math.PI + 90) % 360);
+        const dirs = [0,22,45,67,90,112,135,157,180,202,225,247,270,292,315,337];
+        let closest = dirs[0];
+        let minDiff = 360;
+        for(const d of dirs){
+          let diff = Math.abs(d - angle);
+          diff = Math.min(diff, 360 - diff);
+          if(diff < minDiff){
+            minDiff = diff;
+            closest = d;
+          }
+        }
+        if (!u.meta) u.meta = {};
+        u.meta.dir = closest.toString().padStart(3,"0");
+      } else {
+        // Reached target
+        animState.clientX = targetWP.x;
+        animState.clientY = targetWP.y;
+        clientAnim = 'idle';
+      }
+    }
+    
+    renderX = animState.clientX;
+    renderY = animState.clientY;
+  } else {
+    // Players use server position
+    renderX = u.x;
+    renderY = u.y;
+  }
+
+  const sx = canvas.width/2 + renderX - camera.x;
+  const sy = canvas.height/2 + renderY - camera.y;
 
   let frames, framesShadow, frameIndex;
 
-  // NPCs use meta.anim and meta.dir
-  const anim = isNPC ? (u.meta?.anim || 'idle') : u.anim;
+  // NPCs use meta.anim and meta.dir (with client-side animation override)
+  const anim = isNPC ? clientAnim : u.anim;
   const dir = isNPC ? (u.meta?.dir || '000') : u.dir;
 
   // Choose sprite set (npcSprites for NPCs, playerSprites for players)
@@ -885,6 +1048,47 @@ for (const item of unitRenderables) {
     ctx.setLineDash([]);
   }
 
+  // Hover highlight for units
+  if (typeof hoveredUnit !== 'undefined' && hoveredUnit) {
+    const sx = canvas.width/2 + hoveredUnit.x - camera.x;
+    const sy = canvas.height/2 + hoveredUnit.y - camera.y;
+    ctx.strokeStyle = 'rgba(100,200,255,0.9)';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([4,2]);
+    ctx.beginPath();
+    ctx.rect(sx - SPRITE_W/2 - 2, sy - SPRITE_H/2 - 2, SPRITE_W + 4, SPRITE_H + 4);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // Hover highlight for buildings and entities
+  if (typeof hoveredObject !== 'undefined' && hoveredObject) {
+    const ox = canvas.width/2 + hoveredObject.x - camera.x;
+    const oy = canvas.height/2 + hoveredObject.y - camera.y;
+    const ow = hoveredObject.w || 256;
+    const oh = hoveredObject.h || 256;
+    ctx.strokeStyle = 'rgba(100,200,255,0.85)';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([4,2]);
+    ctx.beginPath();
+    ctx.rect(ox - ow/2, oy - oh/2, ow, oh);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // Hover highlight for ground items
+  if (typeof hoveredGroundItem !== 'undefined' && hoveredGroundItem) {
+    const gx = canvas.width/2 + hoveredGroundItem.x - camera.x;
+    const gy = canvas.height/2 + hoveredGroundItem.y - camera.y;
+    ctx.strokeStyle = 'rgba(100,255,150,0.9)';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([3,3]);
+    ctx.beginPath();
+    ctx.rect(gx - 24, gy - 24, 48, 48);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
   // Move-to crosshair markers (one per selected unit target)
   try {
     const markers = window.moveMarkers || [];
@@ -968,21 +1172,54 @@ for (const item of unitRenderables) {
     ctx.globalAlpha = 1;
   }
 
-  // Editor collision preview at cursor (honors offset)
-  if (editorMode) {
+  // Item placement preview (shows selected tile from item picker)
+  if (window.itemPlacementMode && window.selectedItemTile && typeof window.itemTileSheet !== "undefined" && window.itemTileSheet.complete) {
+    ctx.globalAlpha = 0.7;
     const wx = camera.x + mouse.x - canvas.width / 2;
     const wy = camera.y + mouse.y - canvas.height / 2;
-    const cx = canvas.width / 2 + wx - camera.x + (editorCollisionOffsetX || 0);
-    const cy = canvas.height / 2 + wy - camera.y + (editorCollisionOffsetY || 0);
-    const w = editorCollisionW;
-    const h = editorCollisionH;
-    ctx.save();
-    ctx.strokeStyle = "rgba(0,255,255,0.9)";
-    ctx.setLineDash([6, 4]);
+    const ix = canvas.width / 2 + wx - camera.x;
+    const iy = canvas.height / 2 + wy - camera.y;
+    
+    const itemTile = window.selectedItemTile;
+    const tileSize = 32;
+    const displaySize = 64; // larger preview for visibility
+    const srcX = itemTile.tx * tileSize;
+    const srcY = itemTile.ty * tileSize;
+    
+    ctx.drawImage(
+      window.itemTileSheet,
+      srcX, srcY, tileSize, tileSize,
+      ix - displaySize / 2, iy - displaySize / 2, displaySize, displaySize
+    );
+    
+    // Draw crosshair around selected item
+    ctx.strokeStyle = "rgba(0,255,100,0.8)";
     ctx.lineWidth = 2;
-    ctx.strokeRect(cx - w / 2, cy - h / 2, w, h);
+    ctx.setLineDash([4, 4]);
+    ctx.strokeRect(ix - displaySize / 2, iy - displaySize / 2, displaySize, displaySize);
     ctx.setLineDash([]);
-    ctx.restore();
+    
+    ctx.globalAlpha = 1;
+  }
+  
+  // NOTE: Skip all other placement previews if in item placement mode
+  if (!window.itemPlacementMode) {
+    // Editor collision preview at cursor (honors offset) - but not when dragging
+    if (editorMode && !draggingPickup) {
+      const wx = camera.x + mouse.x - canvas.width / 2;
+      const wy = camera.y + mouse.y - canvas.height / 2;
+      const cx = canvas.width / 2 + wx - camera.x + (editorCollisionOffsetX || 0);
+      const cy = canvas.height / 2 + wy - camera.y + (editorCollisionOffsetY || 0);
+      const w = editorCollisionW;
+      const h = editorCollisionH;
+      ctx.save();
+      ctx.strokeStyle = "rgba(0,255,255,0.9)";
+      ctx.setLineDash([6, 4]);
+      ctx.lineWidth = 2;
+      ctx.strokeRect(cx - w / 2, cy - h / 2, w, h);
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
   }
 
   // Selection box
@@ -1024,59 +1261,11 @@ for (const item of unitRenderables) {
   // pick a "current unit" for pickup distance checks: first selected local unit
   const picker = myUnits.find(u => u.selected) || null;
 
-  const visibleItems = groundItems.slice().sort((a,b)=>a.y-b.y);
-  for (const it of visibleItems) {
-    const sx = canvas.width/2 + it.x - camera.x;
-    const sy = canvas.height/2 + it.y - camera.y;
-
-    // icon / fallback
-    const icon = itemIcons[it.name];
-    if (icon && icon.complete && icon.naturalWidth > 0) {
-      ctx.drawImage(icon, sx - GROUND_ITEM_SIZE/2, sy - GROUND_ITEM_SIZE/2, GROUND_ITEM_SIZE, GROUND_ITEM_SIZE);
-    } else {
-      ctx.fillStyle = "rgba(255,255,255,0.15)";
-      ctx.beginPath();
-      ctx.arc(sx, sy, 14, 0, Math.PI*2);
-      ctx.fill();
-      ctx.strokeStyle = "white";
-      ctx.stroke();
-    }
-
-    // name above item (always)
-    ctx.fillStyle = "white";
-    ctx.font = "12px monospace";
-    ctx.textAlign = "center";
-    ctx.fillText(it.name, sx, sy - 22);
-
-    // Hover tooltip for ground item stats
-    if (hoveredGroundItem && hoveredGroundItem.id === it.id) {
-      const statTxt = itemStatText ? itemStatText(it.name) : "";
-      if (statTxt) {
-        const tip = statTxt;
-        ctx.font = "11px monospace";
-        const tw = ctx.measureText(tip).width + 12;
-        const th = 16;
-        const tx = sx - tw / 2;
-        const ty = sy - 42;
-
-        ctx.fillStyle = "rgba(0,0,0,0.7)";
-        ctx.fillRect(tx, ty - th, tw, th);
-        ctx.strokeStyle = "#0ff";
-        ctx.lineWidth = 1;
-        ctx.strokeRect(tx, ty - th, tw, th);
-
-        ctx.fillStyle = "#0ff";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(tip, sx, ty - th / 2);
-
-        // reset baseline for downstream text
-        ctx.textBaseline = "alphabetic";
-      }
-    }
-
-    // show pickup range indicator if a selected unit is near enough
+  // Draw pickup range indicators for ground items
+  for (const it of groundItems) {
     if (picker && unitCanPickup(picker, it)) {
+      const sx = canvas.width/2 + it.x - camera.x;
+      const sy = canvas.height/2 + it.y - camera.y;
       ctx.strokeStyle = "lime";
       ctx.beginPath();
       ctx.arc(sx, sy, 18, 0, Math.PI*2);
@@ -1086,26 +1275,42 @@ for (const item of unitRenderables) {
 
   // Dragging ground item icon follows cursor
   if (draggingPickup) {
-    const gi = groundItems.find(x => x.id === draggingPickup.groundItemId);
+    const gi = draggingPickup.groundItemId 
+      ? groundItems.find(x => x.id === draggingPickup.groundItemId)
+      : mapObjects.find(x => x.id === draggingPickup.mapObjectItemId);
     if (gi) {
-      const icon = itemIcons[gi.name];
       const mx = dragMouse.x;
       const my = dragMouse.y;
 
       ctx.globalAlpha = 0.85;
-      if (icon && icon.complete && icon.naturalWidth > 0) {
-        ctx.drawImage(icon, mx - 16, my - 16, 32, 32);
-      } else {
-        ctx.fillStyle = "rgba(255,255,255,0.2)";
-        ctx.beginPath();
-        ctx.arc(mx, my, 14, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.strokeStyle = "white";
-        ctx.stroke();
-        ctx.fillStyle = "white";
-        ctx.font = "10px monospace";
-        ctx.textAlign = "center";
-        ctx.fillText(gi.name, mx, my - 18);
+      
+      // For map object items, draw from tile sheet
+      if (draggingPickup.mapObjectItemId && gi.meta?.itemTile && itemTileSheet.complete) {
+        const itemTile = gi.meta.itemTile;
+        const srcX = itemTile.tx * ITEM_TILE_SIZE;
+        const srcY = itemTile.ty * ITEM_TILE_SIZE;
+        ctx.drawImage(
+          itemTileSheet,
+          srcX, srcY, ITEM_TILE_SIZE, ITEM_TILE_SIZE,
+          mx - 16, my - 16, 32, 32
+        );
+      } else if (draggingPickup.groundItemId) {
+        // For ground items, use icon
+        const icon = itemIcons[gi.name];
+        if (icon && icon.complete && icon.naturalWidth > 0) {
+          ctx.drawImage(icon, mx - 16, my - 16, 32, 32);
+        } else {
+          ctx.fillStyle = "rgba(255,255,255,0.2)";
+          ctx.beginPath();
+          ctx.arc(mx, my, 14, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = "white";
+          ctx.stroke();
+          ctx.fillStyle = "white";
+          ctx.font = "10px monospace";
+          ctx.textAlign = "center";
+          ctx.fillText(gi.name, mx, my - 18);
+        }
       }
       ctx.globalAlpha = 1;
     }

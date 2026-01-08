@@ -102,7 +102,7 @@ for (const name of tileNames) {
     const frames = [];
     for (let i = 1; i <= 7; i++) {
       const f = new Image();
-      f.src = `static/campfire/campfire${i}.png`;
+      f.src = `/static/Campfire/CampFire${i}.png`;
       frames.push(f);
     }
 
