@@ -418,11 +418,8 @@ canvas.addEventListener("mousemove", e=>{
     if (o.owner === mySid) continue;
     if (!(o.type === 'building' || o.kind === 'town_center' || o.kind === 'mine' || o.kind === 'blacksmith' || o.kind === 'spider')) continue;
 
-    let w = BUILD_W, h = BUILD_H;
-    if (o.type === 'building') { w = BUILD_W; h = BUILD_H; }
-    else { const def = TILE_DEFS[o.kind] || { w: 256, h: 256 }; w = o.meta?.w ?? def.w; h = o.meta?.h ?? def.h; }
-
-    if (Math.abs(wx - o.x) < w/2 && Math.abs(wy - o.y) < h/2) {
+    // Clickable radius reduced to 50 pixels to match visual representation
+    if (Math.hypot(o.x - wx, o.y - wy) < 50) {
       hoveredAttackEntity = o;
       canvas.style.cursor = 'crosshair';
       return;
@@ -431,7 +428,7 @@ canvas.addEventListener("mousemove", e=>{
 
   // Units hover (priority 5)
   for (const u of myUnits) {
-    if (Math.hypot(u.x - wx, u.y - wy) < 20) {
+    if (Math.hypot(u.x - wx, u.y - wy) < 30) {
       hoveredUnit = u;
       canvas.style.cursor = 'pointer';
       canvas.title = `Unit ${u.id.slice(0, 6)}`;
@@ -441,7 +438,7 @@ canvas.addEventListener("mousemove", e=>{
 
   // Buildings (mine) hover (priority 6)
   for (const b of buildings) {
-    if (b.owner === mySid && Math.abs(wx - b.x) < BUILD_W/2 && Math.abs(wy - b.y) < BUILD_H/2) {
+    if (b.owner === mySid && Math.hypot(b.x - wx, b.y - wy) < 60) {
       hoveredObject = { ...b, type: 'building', w: BUILD_W, h: BUILD_H };
       canvas.style.cursor = 'pointer';
       return;
@@ -457,7 +454,8 @@ canvas.addEventListener("mousemove", e=>{
     if (o.type === 'building') { w = BUILD_W; h = BUILD_H; }
     else if (o.meta) { const def = TILE_DEFS[o.kind] || { w: 256, h: 256 }; w = o.meta?.w ?? def.w; h = o.meta?.h ?? def.h; }
     
-    if (Math.abs(wx - o.x) < w/2 && Math.abs(wy - o.y) < h/2) {
+    // Clickable radius reduced to 50 pixels to match visual representation
+    if (Math.hypot(o.x - wx, o.y - wy) < 50) {
       hoveredObject = { ...o, w, h };
       canvas.style.cursor = 'pointer';
       if (o.meta?.title) canvas.title = o.meta.title;
@@ -546,19 +544,17 @@ function updateSelectedUnits() {
 
 function hitTestMapObject(wx, wy) {
   // pick topmost by render order: scan from end (mapObjects drawn in order)
+  // Use small radius (50px) to match visual representation and hover detection
   for (let i = mapObjects.length - 1; i >= 0; i--) {
     const o = mapObjects[i];
     if (!o.meta || !o.meta.entity) continue;
 
     if (o.type === "building") {
-      // building uses BUILD_W/H
-      if (Math.abs(wx - o.x) < BUILD_W / 2 && Math.abs(wy - o.y) < BUILD_H / 2) return o;
+      // Buildings: 60 pixel radius
+      if (Math.hypot(o.x - wx, o.y - wy) < 60) return o;
     } else if (o.type === "tile") {
-      const def = TILE_DEFS[o.kind] || { w: 256, h: 256 };
-      // Use collision box if available, otherwise use tile size
-      const w = (o.meta?.cw && o.kind !== 'billboard') ? o.meta.cw : (o.meta?.w ?? def.w);
-      const h = (o.meta?.ch && o.kind !== 'billboard') ? o.meta.ch : (o.meta?.h ?? def.h);
-      if (Math.abs(wx - o.x) < w / 2 && Math.abs(wy - o.y) < h / 2) return o;
+      // Entities: 50 pixel radius
+      if (Math.hypot(o.x - wx, o.y - wy) < 50) return o;
     }
   }
   return null;

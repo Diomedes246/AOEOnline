@@ -1056,7 +1056,7 @@ for (const item of unitRenderables) {
     ctx.lineWidth = 2;
     ctx.setLineDash([4,2]);
     ctx.beginPath();
-    ctx.rect(sx - SPRITE_W/2 - 2, sy - SPRITE_H/2 - 2, SPRITE_W + 4, SPRITE_H + 4);
+    ctx.rect(sx - 30, sy - 30, 60, 60);
     ctx.stroke();
     ctx.setLineDash([]);
   }
