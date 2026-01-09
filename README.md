@@ -1,6 +1,6 @@
 Install Python 3.x
 
-$ pip install -r /path/to/requirements.txt
+$ pip install -r requirements.txt
 
 $ flask run
 
