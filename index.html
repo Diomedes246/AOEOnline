@@ -498,6 +498,17 @@
         <div style="font-size:12px; opacity:0.8;">Item Name</div>
         <input id="itemNameInput" style="width:100%; height:30px;" placeholder="Item" />
       </div>
+
+        <div style="margin-top:8px;">
+          <div style="font-size:12px; opacity:0.8;">Item Type</div>
+          <select id="itemTypeInput" style="width:100%; height:32px;">
+            <option value="weapon">Weapon</option>
+            <option value="armor">Armor</option>
+            <option value="enchantment">Enchantment</option>
+            <option value="consumable">Consumable</option>
+            <option value="misc">Misc</option>
+          </select>
+        </div>
       
       <div style="margin-top:8px;">
         <div style="font-size:12px; opacity:0.8;">Attack Bonus</div>
@@ -753,8 +764,8 @@
   function updateBuildButton() {
     if (!buildBtn) return;
     const owned = (mapObjects || []).filter(o => o.kind === 'town_center' && o.owner === mySid).length;
-    buildBtn.innerText = `Place Town Center (Cost: ${TOWN_CENTER_COST} red) (${owned}/${BUILD_LIMIT})`;
-    // disable if reached build limit or not enough red resources
+    buildBtn.innerHTML = `Place Town Center (Cost: ${TOWN_CENTER_COST} <img src="static/rock.png" width="14" height="14" style="vertical-align:middle;">) (${owned}/${BUILD_LIMIT})`;
+    // disable if reached build limit or not enough rock resources
     buildBtn.disabled = (owned >= BUILD_LIMIT) || ((resourceCounts.red || 0) < TOWN_CENTER_COST);
     buildBtn.title = `Cost: ${TOWN_CENTER_COST} resources`;
   }
@@ -762,17 +773,17 @@
   function updateMineButton() {
     if (!mineBtn) return;
     const mineCost = 3;
-    mineBtn.innerText = `Place Mine (Cost: ${mineCost} blue)`;
+    mineBtn.innerHTML = `Place Mine (Cost: ${mineCost} <img src="static/berry.png" width="14" height="14" style="vertical-align:middle;">)`;
     mineBtn.disabled = ((resourceCounts.blue || 0) < mineCost);
-    mineBtn.title = `Cost: ${mineCost} blue resources`;
+    mineBtn.title = `Cost: ${mineCost} berries`;
   }
 
   function updateBlacksmithButton() {
     if (!blacksmithBtn) return;
     const smithCost = 3;
-    blacksmithBtn.innerText = `Place Blacksmith (Cost: ${smithCost} red)`;
+    blacksmithBtn.innerHTML = `Place Blacksmith (Cost: ${smithCost} <img src="static/rock.png" width="14" height="14" style="vertical-align:middle;">)`;
     blacksmithBtn.disabled = ((resourceCounts.red || 0) < smithCost);
-    blacksmithBtn.title = `Cost: ${smithCost} red resources`;
+    blacksmithBtn.title = `Cost: ${smithCost} rocks`;
   }
 
   // Entity inspector elements (used by openEntityInspector / input handlers)
@@ -1151,7 +1162,10 @@
   }
 
   function getDefaultEntityTitle(o) {
-    if (o.type === "building") return "Building";
+    if (o.type === "building") {
+      if (o.kind === "town_center") return "Town Center";
+      return "Building";
+    }
     if (o.type === "tile") return o.kind ? prettyName(o.kind) : "Tile";
     return "Entity";
   }
@@ -1199,11 +1213,13 @@
         
         // Populate item stat inputs
         const itemNameInput = document.getElementById("itemNameInput");
+          const itemTypeInput = document.getElementById("itemTypeInput");
         const itemAttackInput = document.getElementById("itemAttackInput");
         const itemDefenseInput = document.getElementById("itemDefenseInput");
         const itemBonusInput = document.getElementById("itemBonusInput");
         
         if (itemNameInput) itemNameInput.value = o.meta.itemStats.name || 'Item';
+          if (itemTypeInput) itemTypeInput.value = o.meta.itemType || 'weapon';
         if (itemAttackInput) itemAttackInput.value = o.meta.itemStats.attack || 0;
         if (itemDefenseInput) itemDefenseInput.value = o.meta.itemStats.defense || 0;
         if (itemBonusInput) itemBonusInput.value = o.meta.itemStats.bonus || 0;
@@ -1464,9 +1480,9 @@
         const isTownCenter = (o.kind === "town_center" || (o.meta && o.meta.kind === "town_center"));
         if (isTownCenter) {
           const btn = document.createElement("button");
-          btn.textContent = "Spawn Unit (cost: 1 green)";
+          btn.innerHTML = 'Spawn Unit (cost: 1 <img src="static/gold.png" width="14" height="14" style="vertical-align:middle;">)';
           btn.style.height = "30px";
-          // disable for players who don't own this town center or lack green resources
+          // disable for players who don't own this town center or lack gold resources
           const owned = (o.owner && o.owner === mySid);
           const hasGreen = (window.resourceCounts && (window.resourceCounts.green || 0) >= 1);
           btn.disabled = !owned || !hasGreen;
@@ -1474,7 +1490,7 @@
             btn.title = "You do not own this building";
             btn.style.opacity = "0.5";
           } else if (!hasGreen) {
-            btn.title = "Requires 1 green resource to spawn";
+            btn.title = "Requires 1 gold to spawn";
             btn.style.opacity = "0.5";
           }
           btn.onclick = () => {
@@ -1494,38 +1510,59 @@
           wrap.style.alignItems = "center";
 
           const owned = !!o.owner && o.owner === mySid;
+          console.log(`[MINE_INSPECTOR] Mine ${o.id?.substring(0, 8)}: owner=${o.owner}, mySid=${mySid}, owned=${owned}`);
 
           const label = document.createElement("div");
           label.textContent = "Mine:";
           wrap.appendChild(label);
 
-          const select = document.createElement("select");
-          ["red","green","blue"].forEach(t => {
-            const opt = document.createElement("option");
-            opt.value = t;
-            opt.textContent = t.charAt(0).toUpperCase() + t.slice(1);
-            select.appendChild(opt);
-          });
+          // Icon-based resource selector (rock/red, gold/green, berry/blue)
+          const resources = [
+            { key: "red",   icon: "static/rock.png",  title: "Rock" },
+            { key: "green", icon: "static/gold.png",  title: "Gold" },
+            { key: "blue",  icon: "static/berry.png", title: "Berry" }
+          ];
           const current = (o.meta && o.meta.mine && o.meta.mine.resource) ? o.meta.mine.resource : "red";
-          select.value = current;
-          if (!owned) {
-            select.disabled = true;
-            select.title = "Only the owner can change the resource";
-          }
-          select.onchange = () => {
-            if (!owned) return;
-            const sel = select.value;
-            // Preserve all existing meta when updating just the resource type
-            const updated = mapObjects.find(x => x.id === o.id);
-            if (updated && updated.meta && updated.meta.mine) {
-              updated.meta.mine.resource = sel;
-              socket.emit("update_map_object", { id: o.id, meta: updated.meta });
-            } else {
-              // Fallback if meta not found
-              socket.emit("update_map_object", { id: o.id, meta: { mine: { resource: sel } } });
+          console.log(`[MINE_INSPECTOR] Creating resource buttons: current=${current}, owned=${owned}`);
+          const group = document.createElement("div");
+          group.style.display = "flex";
+          group.style.gap = "6px";
+          resources.forEach(r => {
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.style.padding = "4px";
+            btn.style.border = (r.key === current) ? "2px solid #0af" : "1px solid #777";
+            btn.style.borderRadius = "6px";
+            btn.style.background = "rgba(255,255,255,0.08)";
+            btn.innerHTML = `<img src="${r.icon}" width="18" height="18" alt="${r.title}" title="${r.title}" />`;
+            if (!owned) {
+              btn.disabled = true;
+              btn.title = "Only the owner can change the resource";
+              console.log(`[MINE_INSPECTOR] Button for ${r.key} disabled`);
             }
-          };
-          wrap.appendChild(select);
+            btn.onclick = () => {
+              if (!owned) {
+                console.log(`[MINE_CHANGE] Click blocked: not owned`);
+                return;
+              }
+              console.log(`[MINE_CHANGE] Changing mine resource to ${r.key}`);
+              const updated = mapObjects.find(x => x.id === o.id);
+              if (updated && updated.meta && updated.meta.mine) {
+                updated.meta.mine.resource = r.key;
+                console.log(`[MINE_CHANGE] Sending with full meta:`, updated.meta);
+                socket.emit("update_map_object", { id: o.id, meta: updated.meta });
+              } else {
+                console.log(`[MINE_CHANGE] Sending with minimal meta`);
+                socket.emit("update_map_object", { id: o.id, meta: { mine: { resource: r.key } } });
+              }
+              // Update button borders to reflect selection
+              Array.from(group.children).forEach((child, idx) => {
+                child.style.border = (resources[idx].key === r.key) ? "2px solid #0af" : "1px solid #777";
+              });
+            };
+            group.appendChild(btn);
+          });
+          wrap.appendChild(group);
 
           const timerEl = document.createElement("div");
           wrap.appendChild(timerEl);
@@ -1595,7 +1632,7 @@
           wrap.appendChild(hint);
 
           const btn = document.createElement("button");
-          btn.textContent = "Upgrade item (cost: 3 blue)";
+          btn.innerHTML = 'Upgrade item (cost: 3 <img src="static/berry.png" width="14" height="14" style="vertical-align:middle;">)';
           btn.style.height = "30px";
           const hasBlue = (resourceCounts.blue || 0) >= 3;
           const hasItem = !!smithItem;
@@ -1607,7 +1644,7 @@
             btn.title = "Place an item into the Blacksmith slot first";
             btn.style.opacity = "0.8";
           } else if (!hasBlue) {
-            btn.title = "Requires 3 blue resources";
+            btn.title = "Requires 3 berries";
             btn.style.opacity = "0.8";
           }
           btn.onclick = () => {
@@ -1713,13 +1750,20 @@
     // Save item stats if this is an item
     if (o.kind === 'item' && o.meta?.itemStats) {
       const itemNameInput = document.getElementById("itemNameInput");
+      const itemTypeInput = document.getElementById("itemTypeInput");
       const itemAttackInput = document.getElementById("itemAttackInput");
       const itemDefenseInput = document.getElementById("itemDefenseInput");
       const itemBonusInput = document.getElementById("itemBonusInput");
 
       let resolvedName = (itemNameInput && itemNameInput.value ? itemNameInput.value.trim() : "") || newTitle || 'Item';
       o.meta.itemStats.name = resolvedName;
+      o.meta.title = resolvedName; // Keep title in sync with name for items
       if (!newTitle) newTitle = resolvedName;
+
+      if (itemTypeInput) {
+        const t = (itemTypeInput.value || '').trim().toLowerCase();
+        o.meta.itemType = t || 'weapon';
+      }
 
       if (itemAttackInput) {
         const parsed = parseInt(itemAttackInput.value, 10);
@@ -2010,6 +2054,12 @@
   resources = resources || [];          // {id, x, y}
   const resourceImg = new Image();
   resourceImg.src = "static/resource.png";
+  const goldImg = new Image();
+  goldImg.src = "static/gold.png";
+  const rockImg = new Image();
+  rockImg.src = "static/rock.png";
+  const berriesImg = new Image();
+  berriesImg.src = "static/berry.png";
   const RES_W = 48;
   const RES_H = 48;
 
@@ -2703,6 +2753,8 @@
         
         // Track quest kills when entity dies
         if (wasAlive && hp <= 0) {
+          // Refresh build buttons immediately so players can rebuild Town Centers
+          try { updateBuildButton(); updateMineButton(); updateBlacksmithButton(); } catch (e) {}
           const entityKind = o.kind || o.type;
           console.log("[QUEST] Entity killed:", entityKind, entityId);
           

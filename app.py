@@ -32,6 +32,8 @@ TICKS_PER_SECOND = 60.0
 # Shared collision constants (must match client defaults)
 BUILD_W = 256
 BUILD_H = 256
+FIELD_W = 256
+FIELD_H = 256
 BUILD_COLLISION_PADDING = -50
 GROUND_ITEM_COLLISION_PAD = 8
 
@@ -670,6 +672,7 @@ def place_map_object(data):
             # optional itemSlots for persistent entity items
             "itemSlots": data.get("itemSlots") or []
         }
+        print(f"[PLACE_MAP_OBJECT] {obj['kind']} at ({obj['x']}, {obj['y']}), entity={obj['meta'].get('entity')}", flush=True)
         # Normalize collision offsets so they persist even if missing
         m = obj["meta"]
         if m is not None:
@@ -744,15 +747,22 @@ def update_map_object(data):
         changed = False
         for o in map_objects:
             if o.get("id") == oid:
-                print(f"[UPDATE_MAP_OBJECT] Found object, type={o.get('type')}, kind={o.get('kind')}", flush=True)
+                print(f"[UPDATE_MAP_OBJECT] Found object, type={o.get('type')}, kind={o.get('kind')}, owner={o.get('owner')}", flush=True)
                 # Only the owner may change a mine's resource type
                 try:
                     new_mine_resource = meta.get("mine", {}).get("resource")
-                except Exception:
+                    print(f"[UPDATE_MAP_OBJECT] new_mine_resource={new_mine_resource}", flush=True)
+                except Exception as e:
+                    print(f"[UPDATE_MAP_OBJECT] Exception getting new_mine_resource: {e}", flush=True)
                     new_mine_resource = None
-                if new_mine_resource is not None and o.get("kind") == "mine" and o.get("owner") and o.get("owner") != pid:
-                    socketio.emit("server_debug", {"msg": "update_map_object: only the owner can change mine resource"}, to=request.sid)
-                    break
+                if new_mine_resource is not None and o.get("kind") == "mine":
+                    owner = o.get("owner")
+                    print(f"[UPDATE_MAP_OBJECT] Mine resource change: owner={owner}, pid={pid}", flush=True)
+                    # Allow change only if no owner (neutral) OR if player is the owner
+                    if owner and owner != pid:
+                        socketio.emit("server_debug", {"msg": "update_map_object: only the owner can change mine resource"}, to=request.sid)
+                        print(f"[UPDATE_MAP_OBJECT] Blocked: player {pid[:8]} is not owner {owner[:8]}", flush=True)
+                        break
                 o["meta"] = {**(o.get("meta") or {}), **meta}  # merge
                 print(f"[UPDATE_MAP_OBJECT] Meta after merge: {o['meta']}", flush=True)
                 # update persistent itemSlots if provided
@@ -778,6 +788,7 @@ def update_map_object(data):
             print(f"[UPDATE_MAP_OBJECT] No object found with id={oid}", flush=True)
 
     socketio.emit("map_objects", map_objects)
+    emit_state()
 
 
 @socketio.on("delete_map_object")
@@ -2082,38 +2093,77 @@ def mine_production_loop():
                     if now >= next_tick:
                         owner = o.get("owner")
                         rtype = (m.get("mine", {}) or {}).get("resource", "red")
-                        print(f"[MINE_PRODUCE] Mine {o.get('id')} TRIGGERED! owner={owner}, resource={rtype}", flush=True)
-                        
-                        # Award resource to owner
-                        if owner:
-                            # Ensure player entry exists with full shape so client keeps it
-                            if owner not in players:
-                                print(f"[MINE_PRODUCE] Owner {owner[:8]} not in players, creating entry", flush=True)
-                                players[owner] = {
-                                    "resources": {"red": 0, "green": 0, "blue": 0},
-                                    "units": [],
-                                    "x": 0,
-                                    "y": 0,
-                                    "color": "#fff",
-                                }
-                            # If entry exists but missing fields, patch them
-                            players[owner].setdefault("resources", {"red": 0, "green": 0, "blue": 0})
-                            players[owner].setdefault("units", [])
-                            players[owner].setdefault("x", 0)
-                            players[owner].setdefault("y", 0)
-                            players[owner].setdefault("color", "#fff")
+                        # Determine if a worker unit is present on the field tile next to the mine
+                        worker_present = False
+                        if owner and owner in players:
+                            units = players.get(owner, {}).get("units", [])
+                            # Find the field for this mine (should be at mine_x + 140, mine_y)
+                            # But directly check if there's a field object in mapObjects
+                            field_object = None
+                            for obj_test in map_objects:
+                                if (obj_test.get("kind") == "field" and 
+                                    abs(obj_test.get("x", 0) - (o.get("x", 0) + 140)) < 10 and 
+                                    abs(obj_test.get("y", 0) - o.get("y", 0)) < 10):
+                                    field_object = obj_test
+                                    break
+                            
+                            if field_object:
+                                field_cx = field_object.get("x", 0)
+                                field_cy = field_object.get("y", 0)
+                            else:
+                                # Fallback: use expected field position if not found
+                                field_cx = o.get("x", 0) + 140
+                                field_cy = o.get("y", 0)
+                            
+                            field_w = 256
+                            field_h = 256
+                            for u in units:
+                                ux = float(u.get("x", 0))
+                                uy = float(u.get("y", 0))
+                                # Check if unit is within field bounds (not just rough radius)
+                                if abs(ux - field_cx) < field_w / 2 and abs(uy - field_cy) < field_h / 2:
+                                    worker_present = True
+                                    print(f"[MINE_PRODUCE] Worker found at ({ux:.0f}, {uy:.0f}) on field at ({field_cx:.0f}, {field_cy:.0f})", flush=True)
+                                    break
+                            if not worker_present:
+                                print(f"[MINE_PRODUCE] No worker on field at ({field_cx:.0f}, {field_cy:.0f}); units: {[(u.get('x'), u.get('y')) for u in units]}", flush=True)
 
-                            pr = players[owner]["resources"]
-                            old_val = pr.get(rtype, 0)
-                            pr[rtype] = old_val + 1
-                            print(f"[MINE_PRODUCE] Awarded +1 {rtype} to {owner[:8]}. {rtype}: {old_val} -> {pr[rtype]}", flush=True)
+                        if worker_present:
+                            print(f"[MINE_PRODUCE] Mine {o.get('id')} TRIGGERED with worker present. owner={owner}, resource={rtype}", flush=True)
+                            # Award resource to owner
+                            if owner:
+                                # Ensure player entry exists with full shape so client keeps it
+                                if owner not in players:
+                                    print(f"[MINE_PRODUCE] Owner {owner[:8]} not in players, creating entry", flush=True)
+                                    players[owner] = {
+                                        "resources": {"red": 0, "green": 0, "blue": 0},
+                                        "units": [],
+                                        "x": 0,
+                                        "y": 0,
+                                        "color": "#fff",
+                                    }
+                                # If entry exists but missing fields, patch them
+                                players[owner].setdefault("resources", {"red": 0, "green": 0, "blue": 0})
+                                players[owner].setdefault("units", [])
+                                players[owner].setdefault("x", 0)
+                                players[owner].setdefault("y", 0)
+                                players[owner].setdefault("color", "#fff")
+
+                                pr = players[owner]["resources"]
+                                old_val = pr.get(rtype, 0)
+                                pr[rtype] = old_val + 1
+                                print(f"[MINE_PRODUCE] Awarded +1 {rtype} to {owner[:8]}. {rtype}: {old_val} -> {pr[rtype]}", flush=True)
+                            # Schedule next tick
+                            m["nextTick"] = now + interval
+                            m["workerNeeded"] = False
+                            print(f"[MINE_PRODUCE] Next tick scheduled for {now + interval}", flush=True)
+                            changed = True
                         else:
-                            print(f"[MINE_PRODUCE] No owner for mine {o.get('id')}", flush=True)
-                        
-                        # Schedule next tick
-                        m["nextTick"] = now + interval
-                        print(f"[MINE_PRODUCE] Next tick scheduled for {now + interval}", flush=True)
-                        changed = True
+                            # No worker: do not award, and do not advance nextTick so the timer remains waiting
+                            m["workerNeeded"] = True
+                            if owner:
+                                print(f"[MINE_PRODUCE] Mine {o.get('id')} requires worker; production paused", flush=True)
+                                changed = True
             
             if changed:
                 save_map()
@@ -2245,20 +2295,22 @@ def npc_movement_loop():
                         m["anim"] = "idle"
                         if dist > 5:  # If far from waypoint, move toward it
                             move_dist = min(NPC_SPEED, dist)
-                            o["x"] += (dx / dist) * move_dist
-                            o["y"] += (dy / dist) * move_dist
-                            changed = True
+                            if dist > 0.1:
+                                o["x"] += (dx / dist) * move_dist
+                                o["y"] += (dy / dist) * move_dist
+                                changed = True
                     else:
                         # Multi-waypoint NPCs walk between waypoints
                         m["anim"] = "walk"
                         
                         # Move toward waypoint
-                        if dist < 5:  # Reached waypoint, advance to next
+                        if dist < 20:  # Reached waypoint (increased threshold), advance to next
                             m["currentWaypointIndex"] = (current_idx + 1) % len(waypoints)
+                            # Snap to waypoint to avoid getting stuck
                             o["x"] = tx
                             o["y"] = ty
                             changed = True
-                        else:
+                        elif dist > 0.1:  # Only move if there's meaningful distance
                             # Move toward current waypoint
                             move_dist = min(NPC_SPEED, dist)
                             o["x"] += (dx / dist) * move_dist

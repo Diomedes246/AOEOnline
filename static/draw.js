@@ -7,11 +7,24 @@ var selecting = window.selecting;
 
 const QUEST_MARKER_OFFSET = 6; // pixels above the sprite's head
 
-// Load item tile sheet
-const itemTileSheet = new Image();
-itemTileSheet.src = 'static/all.png';
-window.itemTileSheet = itemTileSheet; // Make it globally accessible
+// Load item tile sheets (support multiple sprite sheets)
+const itemTileSheets = [new Image(), new Image()];
+itemTileSheets[0].src = 'static/items1.png';
+itemTileSheets[1].src = 'static/items2.png';
+// For backward compatibility, expose the first sheet as itemTileSheet and the array as itemTileSheets
+window.itemTileSheet = itemTileSheets[0];
+window.itemTileSheets = itemTileSheets;
 const ITEM_TILE_SIZE = 32;
+
+// Resource icons for UI (sprites instead of color squares)
+const resourceIcons = {
+  red: new Image(),   // rock
+  green: new Image(), // gold
+  blue: new Image()   // berry
+};
+resourceIcons.red.src = 'static/rock.png';
+resourceIcons.green.src = 'static/gold.png';
+resourceIcons.blue.src = 'static/berry.png';
 
 function drawCircleDebug(x, y, r, color) {
   ctx.strokeStyle = color;
@@ -36,6 +49,13 @@ function drawEntityTitle(obj, sx, sy) {
 
   // Draw title (primary) and owner (smaller, beneath)
   ctx.textAlign = "center";
+
+  // Draw "worker needed" above title for mines
+  if (obj.kind === "mine" && obj.meta && obj.meta.workerNeeded) {
+    ctx.fillStyle = "#FFD700";
+    ctx.font = "11px monospace";
+    ctx.fillText("worker needed", sx, sy - 48);
+  }
 
   // title line
   ctx.fillStyle = "white";
@@ -228,14 +248,13 @@ function draw() {
     }
 
     if (obj._type === "resource") {
-      ctx.drawImage(resourceImg, sx - RES_W/2, sy - RES_H/2, RES_W, RES_H);
-      // small colored square above resource to indicate type
       const rtype = obj.type || 'red';
-      const colorMap = { red: '#d32f2f', green: '#4CAF50', blue: '#2196F3' };
-      const c = colorMap[rtype] || '#888';
-      ctx.fillStyle = c;
-      const sq = 10;
-      ctx.fillRect(sx - sq/2, sy - RES_H/2 - 12 - sq, sq, sq);
+      const img = (rtype === 'green' && typeof goldImg !== 'undefined' && goldImg.complete) ? goldImg
+                : (rtype === 'red' && typeof rockImg !== 'undefined' && rockImg.complete) ? rockImg
+                : (rtype === 'blue' && typeof berriesImg !== 'undefined' && berriesImg.complete) ? berriesImg
+                : resourceImg;
+      ctx.drawImage(img, sx - RES_W/2, sy - RES_H/2, RES_W, RES_H);
+      // No colored marker above resources anymore
       continue;
     }
 
@@ -351,11 +370,14 @@ function draw() {
       const itemTile = obj.meta.itemTile;
       
       // Draw from tile sheet if loaded
-      if (itemTileSheet.complete && itemTileSheet.naturalWidth > 0) {
+      // Use the correct sheet from itemTile.sheet, or default to sheet 0
+      const sheetIdx = itemTile?.sheet || 0;
+      const sheet = (window.itemTileSheets && window.itemTileSheets[sheetIdx]) || window.itemTileSheet;
+      if (sheet && sheet.complete && sheet.naturalWidth > 0) {
         const srcX = itemTile.tx * ITEM_TILE_SIZE;
         const srcY = itemTile.ty * ITEM_TILE_SIZE;
         ctx.drawImage(
-          itemTileSheet,
+          sheet,
           srcX, srcY, ITEM_TILE_SIZE, ITEM_TILE_SIZE,
           sx - w / 2, sy - h / 2, w, h
         );
@@ -409,24 +431,26 @@ function draw() {
       const interval = Number(obj.meta?.interval || 30);
       const nextTick = Number(obj.meta?.nextTick || 0);
       const now = Date.now() / 1000;
-      const remaining = nextTick ? Math.max(0, nextTick - now) : interval;
-      const pct = Math.max(0, Math.min(1, 1 - (remaining / interval)));
+      // If worker is needed, freeze the timer at current nextTick (do not count down)
+      const remaining = obj.meta?.workerNeeded ? interval : (nextTick ? Math.max(0, nextTick - now) : interval);
+      const pct = obj.meta?.workerNeeded ? 0 : Math.max(0, Math.min(1, 1 - (remaining / interval)));
 
       const barW = Math.min(140, w);
       const barH = 10;
       const bx = sx - barW / 2;
       const by = sy - h / 2 - 10; // nudge lower toward the sprite
 
-      // resource color indicator
+      // resource sprite indicator (use icons instead of color squares)
       const rtype = obj.meta?.mine?.resource || "red";
+      const icon = resourceIcons[rtype];
+      const iconSize = barH; // align to bar height
+      if (icon && icon.complete && icon.naturalWidth > 0) {
+        ctx.drawImage(icon, bx - iconSize - 4, by, iconSize, iconSize);
+      }
+
+      // choose bar color (keep subtle tint by resource)
       const colorMap = { red: "#e53935", green: "#43a047", blue: "#1e88e5" };
       const rc = colorMap[rtype] || "#888";
-      const sq = barH;
-      ctx.fillStyle = rc;
-      ctx.fillRect(bx - sq - 4, by, sq, barH);
-      ctx.strokeStyle = "#fff";
-      ctx.lineWidth = 1;
-      ctx.strokeRect(bx - sq - 4, by, sq, barH);
 
       // progress bar
       ctx.fillStyle = "rgba(0,0,0,0.6)";
@@ -436,6 +460,15 @@ function draw() {
       ctx.strokeStyle = "#fff";
       ctx.lineWidth = 1;
       ctx.strokeRect(bx, by, barW, barH);
+    }
+
+    // Hover highlight for non-entity tiles (fields)
+    if (typeof hoveredObject !== 'undefined' && hoveredObject && hoveredObject.id === obj.id && obj.kind === 'field') {
+      const w = obj.meta?.w ?? 256;
+      const h = obj.meta?.h ?? 256;
+      ctx.strokeStyle = "#00ffff";
+      ctx.lineWidth = 3;
+      ctx.strokeRect(sx - w / 2, sy - h / 2, w, h);
     }
 
     // ✅ debug draw tile collision (rect with offset)
@@ -1173,7 +1206,7 @@ for (const item of unitRenderables) {
   }
 
   // Item placement preview (shows selected tile from item picker)
-  if (window.itemPlacementMode && window.selectedItemTile && typeof window.itemTileSheet !== "undefined" && window.itemTileSheet.complete) {
+  if (window.itemPlacementMode && window.selectedItemTile) {
     ctx.globalAlpha = 0.7;
     const wx = camera.x + mouse.x - canvas.width / 2;
     const wy = camera.y + mouse.y - canvas.height / 2;
@@ -1183,14 +1216,17 @@ for (const item of unitRenderables) {
     const itemTile = window.selectedItemTile;
     const tileSize = 32;
     const displaySize = 64; // larger preview for visibility
-    const srcX = itemTile.tx * tileSize;
-    const srcY = itemTile.ty * tileSize;
-    
-    ctx.drawImage(
-      window.itemTileSheet,
-      srcX, srcY, tileSize, tileSize,
-      ix - displaySize / 2, iy - displaySize / 2, displaySize, displaySize
-    );
+    const sheetIdx = itemTile.sheet || 0;
+    const sheet = (window.itemTileSheets && window.itemTileSheets[sheetIdx]) || window.itemTileSheet;
+    if (sheet && sheet.complete) {
+      const srcX = itemTile.tx * tileSize;
+      const srcY = itemTile.ty * tileSize;
+      ctx.drawImage(
+        sheet,
+        srcX, srcY, tileSize, tileSize,
+        ix - displaySize / 2, iy - displaySize / 2, displaySize, displaySize
+      );
+    }
     
     // Draw crosshair around selected item
     ctx.strokeStyle = "rgba(0,255,100,0.8)";
@@ -1326,11 +1362,14 @@ for (const item of unitRenderables) {
   const popCap = townCentersOwned * (typeof POP_LIMIT === 'number' ? POP_LIMIT : 10);
 
   const rc = window.resourceCounts || { red:0, green:0, blue:0 };
+  const rockIcon = '<img src="static/rock.png" width="14" height="14" style="vertical-align:middle;">';
+  const berriesIcon = '<img src="static/berry.png" width="14" height="14" style="vertical-align:middle;">';
+  const goldIcon = '<img src="static/gold.png" width="14" height="14" style="vertical-align:middle;">';
   const editorEntityInfo = (editorMode && window.selectedEditorEntity) 
     ? `<br/><span style="color:lime">Selected Entity: ${window.selectedEditorEntity.kind || 'entity'} (Arrow keys to move, Shift+Arrow for collision)</span>` 
     : '';
   hud.innerHTML = `Camera: ${camera.x|0}, ${camera.y|0}<br/>
-  <span style="color:#d32f2f">■</span> ${rc.red || 0} <span style="color:#4CAF50">■</span> ${rc.green || 0} <span style="color:#2196F3">■</span> ${rc.blue || 0}<br/>
+  ${rockIcon} ${rc.red || 0} ${goldIcon} ${rc.green || 0} ${berriesIcon} ${rc.blue || 0}<br/>
   Selected: ${selectedUnitsLocal.length}<br/>
   Population: ${popCount} / ${popCap}${editorEntityInfo}`;
 

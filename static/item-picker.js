@@ -1,6 +1,6 @@
 // ===== ITEM TILE PICKER =====
-// itemTileSheet is already loaded in draw.js, reference it from there
-window.selectedItemTile = { tx: 0, ty: 0 }; // tile coordinates in the sheet
+// Item tile sheets are loaded in draw.js; we support multiple sheets
+window.selectedItemTile = { sheet: 0, tx: 0, ty: 0 }; // tile coordinates and sheet index
 window.itemPlacementMode = false; // Track if we're in item placement mode
 
 const itemTilePicker = document.getElementById("itemTilePicker");
@@ -14,35 +14,47 @@ if (itemPickerCloseBtn) {
   };
 }
 
-// Load tile sheet from window.itemTileSheet (defined in draw.js)
+// Load tile sheets from window.itemTileSheets (defined in draw.js)
 const setupItemTilePicker = () => {
-  if (!window.itemTileSheet) {
-    // Wait for itemTileSheet to be available
+  const sheets = window.itemTileSheets;
+  if (!Array.isArray(sheets) || sheets.length === 0) {
     setTimeout(setupItemTilePicker, 100);
     return;
   }
-  
-  window.itemTileSheet.onload = () => {
-    if (!itemTileCanvas) return;
+
+  // Wait until all sheets have finished loading
+  const allLoaded = sheets.every(img => img && img.complete);
+  if (!allLoaded) {
+    const onAnyLoad = () => setTimeout(setupItemTilePicker, 50);
+    sheets.forEach(img => { if (img && !img._listenerAdded) { img.addEventListener('load', onAnyLoad, { once: true }); img._listenerAdded = true; }});
+    return;
+  }
+
+  if (!itemTileCanvas) return;
   const ctx = itemTileCanvas.getContext("2d");
-  
-  // Sheet is 512x3200 with 32x32 tiles
   const tileSize = 32;
   const sheetCols = 512 / tileSize; // 16 columns
-  const sheetRows = 3200 / tileSize; // 100 rows
-  
+  const sheetRowsPerSheet = 3200 / tileSize; // 100 rows per sheet
+  const totalSheets = sheets.length;
+
   // Scale up for visibility
   const displayScale = 2;
   itemTileCanvas.width = 512 * displayScale;
-  itemTileCanvas.height = 3200 * displayScale;
+  itemTileCanvas.height = 3200 * totalSheets * displayScale;
   
+  ctx.clearRect(0, 0, itemTileCanvas.width, itemTileCanvas.height);
   ctx.imageSmoothingEnabled = false;
-  ctx.drawImage(window.itemTileSheet, 0, 0, 512, 3200, 0, 0, itemTileCanvas.width, itemTileCanvas.height);
+
+  sheets.forEach((img, idx) => {
+    const destY = idx * 3200 * displayScale;
+    ctx.drawImage(img, 0, 0, 512, 3200, 0, destY, itemTileCanvas.width, 3200 * displayScale);
+  });
   
   // Draw grid
   ctx.strokeStyle = "rgba(255,255,255,0.2)";
   ctx.lineWidth = 1;
-  for (let r = 0; r <= sheetRows; r++) {
+  const totalRows = sheetRowsPerSheet * totalSheets;
+  for (let r = 0; r <= totalRows; r++) {
     ctx.beginPath();
     ctx.moveTo(0, r * tileSize * displayScale);
     ctx.lineTo(itemTileCanvas.width, r * tileSize * displayScale);
@@ -54,7 +66,6 @@ const setupItemTilePicker = () => {
     ctx.lineTo(c * tileSize * displayScale, itemTileCanvas.height);
     ctx.stroke();
   }
-  };
 };
 
 // Initialize the picker
@@ -72,20 +83,27 @@ if (itemTileCanvas) {
     
     const tileX = Math.floor(x / (tileSize * displayScale));
     const tileY = Math.floor(y / (tileSize * displayScale));
-    
-    window.selectedItemTile = { tx: tileX, ty: tileY };
+    const sheetRowsPerSheet = 3200 / tileSize; // 100 rows
+    const sheetIndex = Math.floor(tileY / sheetRowsPerSheet);
+    const localTy = tileY % sheetRowsPerSheet;
+    window.selectedItemTile = { sheet: sheetIndex, tx: tileX, ty: localTy };
     
     // Redraw with selection highlight
     const ctx = itemTileCanvas.getContext("2d");
     ctx.clearRect(0, 0, itemTileCanvas.width, itemTileCanvas.height);
     ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(window.itemTileSheet, 0, 0, 512, 3200, 0, 0, itemTileCanvas.width, itemTileCanvas.height);
+    // redraw stacked sheets
+    const sheets = window.itemTileSheets || [];
+    sheets.forEach((img, idx) => {
+      const destY = idx * 3200 * displayScale;
+      ctx.drawImage(img, 0, 0, 512, 3200, 0, destY, itemTileCanvas.width, 3200 * displayScale);
+    });
     
     // Draw grid
     ctx.strokeStyle = "rgba(255,255,255,0.2)";
     ctx.lineWidth = 1;
-    const sheetRows = 3200 / tileSize;
-    for (let r = 0; r <= sheetRows; r++) {
+    const totalRows = sheetRowsPerSheet * (window.itemTileSheets ? window.itemTileSheets.length : 1);
+    for (let r = 0; r <= totalRows; r++) {
       ctx.beginPath();
       ctx.moveTo(0, r * tileSize * displayScale);
       ctx.lineTo(itemTileCanvas.width, r * tileSize * displayScale);

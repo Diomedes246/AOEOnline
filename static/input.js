@@ -41,7 +41,8 @@ function normalizeMapLooseItem(obj) {
   if (!obj) return null;
   const meta = obj.meta || {};
   const stats = meta.itemStats || {};
-  const name = stats.name || meta.title || "Item";
+  // For items, use only itemStats.name; for other entities use meta.title
+  const name = (obj.kind === 'item') ? (stats.name || 'Item') : (stats.name || meta.title || 'Item');
   const statTxt = typeof itemStatText === "function" ? itemStatText(stats) : "";
   return {
     id: obj.id,
@@ -445,6 +446,22 @@ canvas.addEventListener("mousemove", e=>{
     }
   }
 
+  // Field hover (priority 6.5) - non-entity field tiles
+  for (let i = (mapObjects || []).length - 1; i >= 0; i--) {
+    const o = mapObjects[i];
+    if (!o || !o.meta || o.meta.entity) continue;  // Only non-entities
+    if (o.kind === 'field') {  // No collides check needed
+      const w = o.meta?.w || 256;
+      const h = o.meta?.h || 256;
+      if (Math.hypot(o.x - wx, o.y - wy) < Math.max(w, h) / 2 + 20) {
+        hoveredObject = { ...o, w, h };
+        canvas.style.cursor = 'pointer';
+        canvas.title = o.meta?.title || 'Field';
+        return;
+      }
+    }
+  }
+
   // Any tile/entity hover (priority 7)
   for (let i = (mapObjects || []).length - 1; i >= 0; i--) {
     const o = mapObjects[i];
@@ -753,7 +770,7 @@ if (window.selectedEditorEntity) {
 // Check if we're in item placement mode
 if (window.itemPlacementMode) {
   // Place item with selected tile
-  const itemTile = window.selectedItemTile || { tx: 0, ty: 0 };
+  const itemTile = window.selectedItemTile || { sheet: 0, tx: 0, ty: 0 };
   const meta = {
     entity: true,
     title: 'Item',
@@ -763,6 +780,7 @@ if (window.itemPlacementMode) {
     w: 64,
     h: 64,
     z: getCurrentZOrder(),
+    itemType: 'weapon',
     itemTile: itemTile,
     itemStats: {
       name: 'Item',
@@ -906,7 +924,7 @@ resetCollisionOffset();
     buildBtn.disabled = true;
     const meta = {
       entity: true,
-      title: "Building",
+      title: "Town Center",
       bio: "",
       actions: [],
       collides: true,
@@ -949,6 +967,27 @@ resetCollisionOffset();
         z: getCurrentZOrder()
       };
       socket.emit("place_map_object", { type: "tile", kind: "mine", x: wx, y: wy, meta });
+      // Auto-place the adjacent field tile to the right of the mine (closer)
+      try {
+        const def = TILE_DEFS["field"] || { w: 256, h: 256 };
+        const fx = wx + 140;  // Closer to the mine (overlapping slightly for better UX)
+        const fy = wy;
+        const fmeta = {
+          entity: false,
+          title: "Field",
+          bio: "",
+          actions: [],
+          collides: false,
+          cw: def.w,
+          ch: def.h,
+          cx: 0,
+          cy: 0,
+          w: def.w,
+          h: def.h,
+          z: getCurrentZOrder() - 1  // Render below the mine
+        };
+        socket.emit("place_map_object", { type: "tile", kind: "field", x: fx, y: fy, meta: fmeta });
+      } catch (e) { console.warn("Failed to auto-place field tile:", e); }
       resetCollisionOffset();
       return;
     }
@@ -1504,6 +1543,44 @@ canvas.addEventListener("mouseup", e=>{
           clickedEntity = hoveredAttackEntity;
         }
 
+        // Check if right-clicking on a field tile for mining animation
+        let clickedField = null;
+        console.log(`[RIGHT_CLICK] Checking for field at (${wx.toFixed(0)}, ${wy.toFixed(0)}). Total mapObjects: ${mapObjects?.length || 0}`);
+        const fields = (mapObjects || []).filter(o => o.kind === 'field');
+        console.log(`[RIGHT_CLICK] Fields in mapObjects:`, fields.map(o => ({ 
+          id: o.id?.substring(0, 8), 
+          x: o.x, 
+          y: o.y, 
+          owner: o.owner,
+          entity: o.meta?.entity 
+        })));
+        
+        if (!clickedEntity && !clickedResource) {
+          for (const o of (mapObjects || [])) {
+            if (o.kind === 'field' && !o.meta?.entity) {
+              // Only allow mining on fields you own
+              if (o.owner && o.owner !== mySid) {
+                console.log(`[RIGHT_CLICK] Field at (${o.x}, ${o.y}) owned by ${o.owner}, skipping`);
+                continue;
+              }
+              
+              const w = o.meta?.w || 256;
+              const h = o.meta?.h || 256;
+              const dist = Math.hypot(o.x - wx, o.y - wy);
+              const radius = Math.max(w, h) / 2 + 20;
+              console.log(`[RIGHT_CLICK] Testing field at (${o.x}, ${o.y}): dist=${dist.toFixed(0)}, radius=${radius.toFixed(0)}, match=${dist < radius}`);
+              if (dist < radius) {
+                console.log(`[RIGHT_CLICK] ✓ FOUND field owned by ${o.owner}!`);
+                clickedField = o;
+                break;
+              }
+            }
+          }
+          if (!clickedField) {
+            console.log(`[RIGHT_CLICK] ✗ No field found in range`);
+          }
+        }
+
         // Assign a stable formation index and total so units keep their relative positions
         selectedUnits.forEach((u, idx) => {
           u._formationIndex = idx;
@@ -1511,10 +1588,19 @@ canvas.addEventListener("mouseup", e=>{
 
           u.targetEnemy = null;
           u.harvesting = null;
+          u.targetField = null;  // Clear any existing field target
+          u.targetResource = null;  // Clear any existing resource target
 
+          // If right-clicking on a field, move to the field and play attack/mining animation
+          if (clickedField) {
+            console.log(`[RIGHT_CLICK_FIELD] Moving unit to field at (${clickedField.x}, ${clickedField.y})`);
+            u.targetField = clickedField;  // Special field target
+            u.anim = 'attack';  // Play attack animation (mining effect)
+            u.manualMove = false;
+          }
           // If clicking an enemy entity, set unit to attack that entity instead of moving to its center
           // Allow attacking entities with no owner (hostile entities like spiders)
-          if (clickedEntity && (!clickedEntity.owner || clickedEntity.owner !== mySid)) {
+          else if (clickedEntity && (!clickedEntity.owner || clickedEntity.owner !== mySid)) {
             // spread attackers around the entity so they do not stack
             const cw = (clickedEntity.meta && clickedEntity.meta.cw) ? clickedEntity.meta.cw : (clickedEntity.meta && clickedEntity.meta.w ? clickedEntity.meta.w : BUILD_W);
             const ch = (clickedEntity.meta && clickedEntity.meta.ch) ? clickedEntity.meta.ch : (clickedEntity.meta && clickedEntity.meta.h ? clickedEntity.meta.h : BUILD_H);
@@ -1543,7 +1629,6 @@ canvas.addEventListener("mouseup", e=>{
             u.ty = clickedResource.y;
           } else {
             // normal move command
-            u.targetResource = null;
             
             // Adjust position if inside a building
             const adjusted = adjustPositionOutsideBuildings(wx, wy);
@@ -1644,10 +1729,15 @@ function ensureEntityMeta(o) {
   if (o.kind === "item") {
     const stats = o.meta.itemStats && typeof o.meta.itemStats === "object" ? o.meta.itemStats : {};
     o.meta.itemStats = stats;
+    if (typeof o.meta.itemType !== "string" || !o.meta.itemType.trim()) {
+      o.meta.itemType = "weapon";
+    }
     const fallbackTitle = (typeof o.meta.title === "string" && o.meta.title.trim()) ? o.meta.title : getDefaultEntityTitle(o);
     if (typeof stats.name !== "string" || !stats.name.trim()) {
       stats.name = fallbackTitle || "Item";
     }
+    // Keep title and name in sync for items
+    o.meta.title = stats.name;
     const atk = Number(stats.attack);
     const def = Number(stats.defense);
     const bonus = Number(stats.bonus);
@@ -1658,7 +1748,10 @@ function ensureEntityMeta(o) {
 }
 
 function getDefaultEntityTitle(o) {
-  if (o.type === "building") return "Building";
+  if (o.type === "building") {
+    if (o.kind === "town_center") return "Town Center";
+    return "Building";
+  }
   if (o.type === "tile") return o.kind ? prettyName(o.kind) : "Tile";
   return "Entity";
 }

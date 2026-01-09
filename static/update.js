@@ -608,6 +608,37 @@ if (u.targetResource !== null) {
   continue;
 }
 
+// ✅ NEW: Handle field mining targets
+if (u.targetField) {
+  const field = u.targetField;
+  const dx = field.x - u.x;
+  const dy = field.y - u.y;
+  const dist = Math.hypot(dx, dy);
+  const fieldRadius = 128 + 20;  // Half of 256 field size + buffer
+
+  if (dist > fieldRadius) {
+    // Move towards the field
+    const speed = 4.5 * dtScale;
+    const moved = trySteerMove(u, dx, dy, Math.min(speed, dist));
+    if (!moved) {
+      u.x += (dx / dist) * Math.min(speed, dist);
+      u.y += (dy / dist) * Math.min(speed, dist);
+    }
+    u.anim = "walk";
+    u.dir = getDirKey(dx, dy);
+  } else {
+    // Unit is on the field - play attack animation and wait for server to detect worker
+    u.anim = "attack";
+  }
+
+  // Resolve collisions
+  applyCollisions(u, now);
+  advanceLocalAnim(u, dtScale);
+  u.lastX = u.x;
+  u.lastY = u.y;
+  continue;
+}
+
 
 
         // --- Combat & auto-chase ---
